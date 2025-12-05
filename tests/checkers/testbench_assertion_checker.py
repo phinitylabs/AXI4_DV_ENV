@@ -70,7 +70,6 @@ class AssertionChecker:
             ".",
             "..",
             "rtl",
-            "sources",  # HUD format
             "harness/test",
             "harness/patch/test",
             "harness/patch/rtl",
@@ -319,9 +318,11 @@ class AssertionChecker:
             content = f.read()
         
         # Count assertion failures
+        # Patterns match: "ASSERTION FAILED", "ASSERTION 1 FAILED", "[ASSERTION 2 FAILED]", etc.
         failure_patterns = [
-            r'ASSERTION FAILED',
-            r'Assertion failed',
+            r'ASSERTION\s*\d*\s*FAILED',      # Matches "ASSERTION FAILED", "ASSERTION 1 FAILED", etc.
+            r'\[ASSERTION\s+\d+\s+FAILED\]',  # Matches "[ASSERTION 2 FAILED]"
+            r'Assertion.*failed',
             r'assert.*failed',
         ]
         failures = 0
@@ -329,9 +330,11 @@ class AssertionChecker:
             failures += len(re.findall(pattern, content, re.IGNORECASE))
         
         # Count assertion passes (if logged)
+        # Patterns match: "ASSERTION PASSED", "ASSERTION 1 PASSED", "[ASSERTION 2 PASSED]", etc.
         pass_patterns = [
-            r'ASSERTION PASSED',
-            r'Assertion passed',
+            r'ASSERTION\s*\d*\s*PASSED',      # Matches "ASSERTION PASSED", "ASSERTION 1 PASSED", etc.
+            r'\[ASSERTION\s+\d+\s+PASSED\]',  # Matches "[ASSERTION 2 PASSED]"
+            r'Assertion.*passed',
         ]
         passes = 0
         for pattern in pass_patterns:
