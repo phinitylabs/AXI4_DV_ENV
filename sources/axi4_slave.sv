@@ -61,6 +61,14 @@ module axi4_slave (
     logic        write_response_pending;
     logic        write_response_ready;
     
+    // Variables for address calculation (moved outside always_ff for Icarus Verilog compatibility)
+    logic [31:0] current_addr;
+    logic [31:0] addr_offset;
+    logic [31:0] byte_size;
+    logic [31:0] wrap_boundary;
+    logic [31:0] aligned_addr;
+    logic [31:0] mem_addr;
+    
     // Response codes
     localparam [1:0] OKAY   = 2'b00;
     localparam [1:0] EXOKAY = 2'b01;
@@ -131,10 +139,6 @@ module axi4_slave (
             // Accept write data if valid and ready
             if (axi_wvalid && axi_wready && write_in_progress) begin
                 // Calculate address based on burst type
-                logic [31:0] current_addr;
-                logic [31:0] addr_offset;
-                logic [31:0] byte_size;
-                
                 byte_size = (1 << write_size); // 2^size bytes
                 addr_offset = write_count * byte_size;
                 
@@ -143,8 +147,6 @@ module axi4_slave (
                     INCR:  current_addr = write_addr + addr_offset;
                     WRAP:  begin
                         // For WRAP, calculate wrap boundary
-                        logic [31:0] wrap_boundary;
-                        logic [31:0] aligned_addr;
                         aligned_addr = (write_addr >> write_size) << write_size;
                         wrap_boundary = aligned_addr + ((write_len + 1) << write_size);
                         current_addr = aligned_addr + ((write_addr + addr_offset - aligned_addr) % wrap_boundary);
@@ -154,7 +156,6 @@ module axi4_slave (
                 
                 // Write to memory (only if address is within range)
                 if (current_addr < (MEM_SIZE * 4)) begin
-                    logic [31:0] mem_addr;
                     mem_addr = current_addr >> 2; // Convert byte address to word address
                     
                     // Apply write strobes
