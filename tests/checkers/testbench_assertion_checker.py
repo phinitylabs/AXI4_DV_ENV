@@ -18,18 +18,20 @@ from typing import Dict, List, Optional, Tuple
 class AssertionChecker:
     """Checks for assertions in testbenches and analyzes their execution."""
     
-    def __init__(self, testbench_path: str, dut_path: Optional[str] = None):
+    def __init__(self, testbench_path: str, dut_path: Optional[str] = None, simulator: str = "icarus"):
         """
         Initialize the assertion checker.
         
         Args:
             testbench_path: Path to the testbench file
             dut_path: Optional path to DUT file (if testbench doesn't include it)
+            simulator: Simulator to use ("icarus" or "verilator")
         """
         self.testbench_path = self._resolve_path(testbench_path)
         # Don't resolve dut_path here - it may contain multiple files separated by spaces
         # Resolution will happen in compile_testbench() when files are split
         self.dut_path = dut_path
+        self.simulator = simulator.lower()
         # Use log directory for all logs - always use harness/patch/tests for grading
         # This ensures all logs are in one place for grading, regardless of testbench location
         # Testbench can be in verif/ but logs go to harness/patch/tests/log/
@@ -177,7 +179,7 @@ class AssertionChecker:
     
     def compile_testbench(self) -> Tuple[bool, str]:
         """
-        Compile the testbench with Icarus Verilog.
+        Compile the testbench with the configured simulator.
         
         Returns:
             (success, error_message)
@@ -185,39 +187,38 @@ class AssertionChecker:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # Build command
-        cmd = ["iverilog", "-g2012", "-o", f"{self.output_dir}/tb.out"]
-        
-        # Add DUT if specified (handle multiple files separated by spaces)
+        # Collect all source files
+        source_files = []
         if self.dut_path:
-            # Split by spaces to handle multiple files
             dut_files = self.dut_path.split()
             for dut_file in dut_files:
-                dut_file = dut_file.strip()  # Remove any extra whitespace
+                dut_file = dut_file.strip()
                 if not dut_file:
                     continue
-                    
                 if os.path.exists(dut_file):
-                    cmd.append(dut_file)
+                    source_files.append(dut_file)
                 else:
-                    # Try to resolve path
                     resolved = self._resolve_path(dut_file)
-                    # Always add the resolved path (even if it doesn't exist)
-                    # This ensures all files are passed to compiler, which will give better error messages
-                    cmd.append(resolved)
+                    source_files.append(resolved)
+        source_files.append(self.testbench_path)
         
-        # Add testbench
-        cmd.append(self.testbench_path)
+        if self.simulator == "verilator":
+            return self._compile_verilator(source_files)
+        else:
+            return self._compile_icarus(source_files)
+    
+    def _compile_icarus(self, source_files: List[str]) -> Tuple[bool, str]:
+        """Compile with Icarus Verilog."""
+        cmd = ["iverilog", "-g2012", "-o", f"{self.output_dir}/tb.out"] + source_files
         
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=60  # Increased timeout for multiple files
+                timeout=60
             )
             
-            # Save compilation log to log directory
             with open(self.compile_log_path, 'w') as log_file:
                 log_file.write(result.stdout)
                 log_file.write(result.stderr)
@@ -230,9 +231,47 @@ class AssertionChecker:
         except Exception as e:
             return False, str(e)
     
+    def _compile_verilator(self, source_files: List[str]) -> Tuple[bool, str]:
+        """Compile with Verilator."""
+        # Get the testbench module name (assume it's the filename without extension)
+        tb_name = os.path.splitext(os.path.basename(self.testbench_path))[0]
+        
+        cmd = [
+            "verilator",
+            "--binary",
+            "--timing",
+            "-Wno-fatal",
+            "-Wno-WIDTHEXPAND",
+            "-Wno-WIDTHTRUNC", 
+            "--top-module", tb_name,
+            "-o", f"{self.output_dir}/Vtb",
+            "--Mdir", f"{self.output_dir}/verilator_obj"
+        ] + source_files
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120  # Verilator takes longer
+            )
+            
+            with open(self.compile_log_path, 'w') as log_file:
+                log_file.write(f"Command: {' '.join(cmd)}\n\n")
+                log_file.write(result.stdout)
+                log_file.write(result.stderr)
+            
+            if result.returncode != 0:
+                return False, result.stderr
+            return True, ""
+        except subprocess.TimeoutExpired:
+            return False, "Verilator compilation timed out"
+        except Exception as e:
+            return False, str(e)
+    
     def run_simulation(self, timeout: int = 60) -> Tuple[bool, str]:
         """
-        Run the simulation with vvp.
+        Run the simulation with the configured simulator.
         
         Args:
             timeout: Maximum simulation time in seconds
@@ -240,17 +279,28 @@ class AssertionChecker:
         Returns:
             (success, error_message)
         """
-        vvp_path = f"{self.output_dir}/tb.out"
-        if not os.path.exists(vvp_path):
-            return False, "Compiled testbench not found. Compile first."
+        if self.simulator == "verilator":
+            exe_path = f"{self.output_dir}/Vtb"
+        else:
+            exe_path = f"{self.output_dir}/tb.out"
+            
+        if not os.path.exists(exe_path):
+            return False, f"Compiled testbench not found at {exe_path}. Compile first."
         
         try:
             # Ensure log directory exists
             os.makedirs(self.log_dir, exist_ok=True)
+            
+            # Build simulation command
+            if self.simulator == "verilator":
+                sim_cmd = [exe_path]
+            else:
+                sim_cmd = ["vvp", exe_path]
+            
             # Run simulation and capture output (overwrite any existing log)
             with open(self.sim_log_path, 'w') as log_file:
                 result = subprocess.run(
-                    ["vvp", vvp_path],
+                    sim_cmd,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
