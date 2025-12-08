@@ -107,8 +107,9 @@ class AssertionChecker:
             content = f.read()
         
         # Pattern for immediate assertions: assert (condition) [else action];
-        immediate_pattern = r'assert\s*\([^)]+\)\s*(?:else\s+[^;]+)?;'
-        immediate_assertions = re.findall(immediate_pattern, content, re.MULTILINE)
+        # More flexible pattern to match both single-line and multi-line assertions
+        immediate_pattern = r'assert\s*\([^)]+\)'
+        immediate_assertions = re.findall(immediate_pattern, content, re.MULTILINE | re.DOTALL)
         
         # Pattern for concurrent assertions: assert property(...) or assert sequence(...)
         concurrent_pattern = r'assert\s+(?:property|sequence)\s*\([^)]+\)'
