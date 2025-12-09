@@ -53,11 +53,32 @@ dut_files_list = [
 ]
 
 
-# Helper to check if testbench exists
-def testbench_exists():
+# Helper to check if testbench exists (underscore prefix to avoid pytest collection)
+def _testbench_exists():
     """Check if testbench file exists (with path resolution)."""
     checker = AssertionChecker(testbench_path, dut_path)
     return os.path.exists(checker.testbench_path)
+
+
+# ============================================================
+# MANDATORY TEST - Must fail if testbench doesn't exist
+# This ensures validation fails when golden patch is not applied
+# ============================================================
+
+def test_testbench_file_exists():
+    """
+    MANDATORY: Testbench file must exist.
+    This test MUST FAIL when testbench is missing (for validation to work).
+    """
+    checker = AssertionChecker(testbench_path, dut_path)
+    exists = os.path.exists(checker.testbench_path)
+    
+    print(f"\n=== Testbench Existence Check ===")
+    print(f"Expected path: {testbench_path}")
+    print(f"Resolved path: {checker.testbench_path}")
+    print(f"Exists: {exists}")
+    
+    assert exists, f"Testbench file not found: {checker.testbench_path}"
 
 
 # ============================================================
@@ -70,7 +91,7 @@ def test_testbench_has_assertions(test):
     Test that checks if generated testbench has assertions.
     Weight: 15%
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     checker = AssertionChecker(testbench_path, dut_path)
@@ -109,7 +130,7 @@ def test_protocol_coverage(test):
     - All 5 AXI4 channels monitored (AW, W, B, AR, R)
     - Required protocol checks present (handshakes, VALID stability, etc.)
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     if not enable_protocol_coverage:
@@ -149,7 +170,7 @@ def test_testbench_compiles(test):
     Test that generated testbench compiles successfully.
     Weight: 10%
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     checker = AssertionChecker(testbench_path, dut_path)
@@ -177,7 +198,7 @@ def test_testbench_simulates(test):
     Test that generated testbench simulates successfully.
     Weight: 10%
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     checker = AssertionChecker(testbench_path, dut_path)
@@ -208,7 +229,7 @@ def test_assertions_execute(test):
     Test that assertions in testbench are executed during simulation.
     Weight: 15%
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     checker = AssertionChecker(testbench_path, dut_path)
@@ -256,7 +277,7 @@ def test_bug_detection(test):
     - Verifies testbench catches them via assertion failures
     - A good testbench should catch at least 50% of bugs
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     if not enable_bug_injection:
@@ -323,7 +344,7 @@ def test_comprehensive_grade(test):
     
     Pass threshold: 60% overall
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     checker = AssertionChecker(testbench_path, dut_path)
@@ -445,7 +466,7 @@ def test_quick_assertion_check():
     Quick test to just check if assertions exist (no compilation).
     Useful for fast feedback.
     """
-    if not testbench_exists():
+    if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
     checker = AssertionChecker(testbench_path, dut_path)
@@ -459,4 +480,3 @@ def test_quick_assertion_check():
     
     if require_assertions:
         assert code_check['has_assertions'], "No assertions found in testbench"
-
