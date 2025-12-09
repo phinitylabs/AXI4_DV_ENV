@@ -1,6 +1,6 @@
 // AXI4 Golden Reference Testbench - Comprehensive Test for All Four Modules
 // This testbench tests: axi4_top, axi4_master, axi4_slave, and axi4_interrupt
-// Location: harness/patch/tests/axi4_top_tb_golden.sv
+// Location: verif/axi4_top_tb.sv
 // This is the golden testbench used for grading reference
 
 `timescale 1ns/1ps
@@ -537,8 +537,8 @@ module axi4_top_tb_golden;
     
     // Coverage and monitoring
     initial begin
-        $dumpfile("harness/patch/tests/log/axi4_top_tb_golden.vcd");
-        $dumpvars(0, axi4_top_tb_golden);
+        $dumpfile("axi4_top_tb.vcd");
+        $dumpvars(0, axi4_top_tb);
         $display("==========================================");
         $display("AXI4 Golden Testbench Started");
         $display("Testing: axi4_top, axi4_master, axi4_slave, axi4_interrupt");
