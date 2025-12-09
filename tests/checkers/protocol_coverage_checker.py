@@ -400,19 +400,22 @@ def format_coverage_report(details: Dict[str, any]) -> str:
     Returns:
         Formatted report string
     """
-    report = """
+    # Pre-compute the checkmark
+    required_status = '✓' if details.get('all_required_present') else '✗'
+    
+    report = f"""
 ============================================================
 AXI4 Protocol Coverage Report
 ============================================================
 
 Summary:
-  Coverage Score: {coverage_score:.1f}%
-  Channels Covered: {channels_covered}/{total_channels}
-  Protocol Checks: {checks_found}/{checks_possible}
-  Required Checks: {required_checks_found}/{required_checks_total} {'✓' if details.get('all_required_present') else '✗'}
+  Coverage Score: {details.get('coverage_score', 0):.1f}%
+  Channels Covered: {details.get('channels_covered', 0)}/{details.get('total_channels', 5)}
+  Protocol Checks: {details.get('checks_found', 0)}/{details.get('checks_possible', 0)}
+  Required Checks: {details.get('required_checks_found', 0)}/{details.get('required_checks_total', 0)} {required_status}
 
 Channel Details:
-""".format(**details)
+"""
     
     for channel, info in details.get("channel_details", {}).items():
         report += f"\n  {channel} Channel ({info['score']:.1f}%):\n"
