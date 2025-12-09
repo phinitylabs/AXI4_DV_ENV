@@ -6,13 +6,22 @@ This module:
 2. Compiles and simulates testbenches
 3. Analyzes simulation logs for assertion execution
 4. Grades testbenches based on assertion coverage
+5. Optionally integrates Covered tool for code coverage analysis
 """
 
 import os
 import re
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Try to import coverage checker
+try:
+    from .coverage_checker import CoverageChecker, check_coverage_with_covered
+    COVERAGE_CHECKER_AVAILABLE = True
+except ImportError:
+    COVERAGE_CHECKER_AVAILABLE = False
 
 
 class AssertionChecker:
@@ -47,6 +56,20 @@ class AssertionChecker:
             self.output_dir = "harness/patch/tests/sim_build"
         self.sim_log_path = os.path.join(self.log_dir, "sim.log")
         self.compile_log_path = os.path.join(self.log_dir, "compile.log")
+        self.vcd_file_path = os.path.join(self.log_dir, "simulation.vcd")
+        self.coverage_dir = os.path.join(self.log_dir, "coverage")
+        
+        # Coverage analysis settings
+        self.enable_coverage = True  # Enable by default if Covered is available
+        self.coverage_thresholds = {
+            "line": 50.0,      # Minimum line coverage for DV tasks
+            "toggle": 40.0,    # Minimum toggle coverage
+            "fsm": 60.0,       # Minimum FSM coverage
+            "comb": 30.0,      # Minimum combinational coverage
+        }
+        
+        # Check if Covered tool is available
+        self.covered_available = shutil.which("covered") is not None
         
     def _resolve_path(self, file_path: str) -> str:
         """Resolve file path by searching common directories."""
@@ -98,10 +121,10 @@ class AssertionChecker:
         Find all assertions in the testbench.
         
         Returns:
-            Dictionary with 'immediate' and 'concurrent' assertion lists
+            Dictionary with 'immediate', 'concurrent', and 'manual' assertion lists
         """
         if not os.path.exists(self.testbench_path):
-            return {"immediate": [], "concurrent": []}
+            return {"immediate": [], "concurrent": [], "manual": []}
         
         with open(self.testbench_path, 'r') as f:
             content = f.read()
@@ -115,9 +138,18 @@ class AssertionChecker:
         concurrent_pattern = r'assert\s+(?:property|sequence)\s*\([^)]+\)'
         concurrent_assertions = re.findall(concurrent_pattern, content, re.MULTILINE)
         
+        # Pattern for manual assertions: $display("ASSERTION PASSED: ...") or $error("ASSERTION FAILED: ...")
+        # This catches testbenches that use manual if-else checking with assertion messages
+        manual_pass_pattern = r'\$display\s*\(\s*"ASSERTION\s+PASSED[^"]*"\s*\)'
+        manual_fail_pattern = r'\$error\s*\(\s*"ASSERTION\s+FAILED[^"]*"\s*\)'
+        manual_pass_assertions = re.findall(manual_pass_pattern, content, re.IGNORECASE)
+        manual_fail_assertions = re.findall(manual_fail_pattern, content, re.IGNORECASE)
+        manual_assertions = manual_pass_assertions + manual_fail_assertions
+        
         return {
             "immediate": immediate_assertions,
             "concurrent": concurrent_assertions,
+            "manual": manual_assertions,
         }
     
     def check_assertions_in_code(self) -> Dict[str, any]:
@@ -151,7 +183,7 @@ class AssertionChecker:
         
         # Find assertions
         assertions = self.find_assertions()
-        total_assertions = len(assertions["immediate"]) + len(assertions["concurrent"])
+        total_assertions = len(assertions["immediate"]) + len(assertions["concurrent"]) + len(assertions.get("manual", []))
         
         # Determine assertion types
         assertion_types = []
@@ -159,6 +191,8 @@ class AssertionChecker:
             assertion_types.append("immediate_assertion")
         if assertions["concurrent"]:
             assertion_types.append("concurrent_assertion")
+        if assertions.get("manual"):
+            assertion_types.append("manual_assertion")
         
         # Check for error assertions
         if re.search(r'assert.*\$error', content, re.IGNORECASE):
@@ -167,7 +201,13 @@ class AssertionChecker:
         # Find assertion locations (line numbers)
         assertion_locations = []
         for i, line in enumerate(lines, 1):
+            # Match formal assert statements
             if re.search(r'\bassert\s+(?:property|sequence|\([^)]+\))', line):
+                assertion_locations.append(i)
+            # Match manual assertion patterns
+            elif re.search(r'\$display\s*\(\s*"ASSERTION\s+PASSED', line, re.IGNORECASE):
+                assertion_locations.append(i)
+            elif re.search(r'\$error\s*\(\s*"ASSERTION\s+FAILED', line, re.IGNORECASE):
                 assertion_locations.append(i)
         
         return {
@@ -404,9 +444,131 @@ class AssertionChecker:
             "assertion_failures": failures,
         }
     
-    def grade(self) -> Dict[str, any]:
+    def find_vcd_file(self) -> Optional[str]:
         """
-        Complete grading workflow: find assertions, compile, simulate, analyze.
+        Find VCD file generated by simulation.
+        
+        Searches in common locations for VCD files.
+        
+        Returns:
+            Path to VCD file or None if not found
+        """
+        # Common VCD file patterns
+        search_dirs = [
+            self.log_dir,
+            self.output_dir,
+            ".",
+            os.path.dirname(self.testbench_path) if self.testbench_path else "."
+        ]
+        
+        vcd_patterns = ["*.vcd", "simulation.vcd", "dump.vcd", "*_tb.vcd"]
+        
+        for search_dir in search_dirs:
+            if not os.path.exists(search_dir):
+                continue
+            for pattern in vcd_patterns:
+                import glob
+                matches = glob.glob(os.path.join(search_dir, pattern))
+                if matches:
+                    # Return the most recent VCD file
+                    return max(matches, key=os.path.getmtime)
+        
+        return None
+    
+    def analyze_coverage(self) -> Dict[str, any]:
+        """
+        Analyze code coverage using the Covered tool.
+        
+        Requires:
+        - Covered tool installed (sudo apt-get install covered)
+        - VCD file from simulation
+        - Design source files
+        
+        Returns:
+            Dictionary with coverage analysis results
+        """
+        results = {
+            "coverage_enabled": self.enable_coverage,
+            "covered_available": self.covered_available,
+            "vcd_found": False,
+            "analysis_success": False,
+            "line_coverage": 0.0,
+            "toggle_coverage": 0.0,
+            "fsm_coverage": 0.0,
+            "comb_coverage": 0.0,
+            "total_coverage": 0.0,
+            "coverage_score": 0.0,
+            "meets_thresholds": False,
+            "errors": []
+        }
+        
+        if not self.enable_coverage:
+            results["errors"].append("Coverage analysis disabled")
+            return results
+        
+        if not self.covered_available:
+            results["errors"].append("Covered tool not installed. Install with: sudo apt-get install covered")
+            return results
+        
+        # Find VCD file
+        vcd_file = self.find_vcd_file()
+        if not vcd_file:
+            results["errors"].append("No VCD file found. Ensure testbench uses $dumpfile/$dumpvars")
+            return results
+        
+        results["vcd_found"] = True
+        
+        # Get design files
+        design_files = []
+        if self.dut_path:
+            for f in self.dut_path.split():
+                f = f.strip()
+                if f and os.path.exists(f):
+                    design_files.append(f)
+                elif f:
+                    resolved = self._resolve_path(f)
+                    if os.path.exists(resolved):
+                        design_files.append(resolved)
+        
+        if not design_files:
+            results["errors"].append("No design files found for coverage analysis")
+            return results
+        
+        # Use CoverageChecker if available
+        if COVERAGE_CHECKER_AVAILABLE:
+            try:
+                checker = CoverageChecker(
+                    design_files=design_files,
+                    vcd_file=vcd_file,
+                    output_dir=self.coverage_dir
+                )
+                checker.set_thresholds(**self.coverage_thresholds)
+                
+                cov_results = checker.analyze_coverage()
+                
+                results["analysis_success"] = cov_results.get("score_success", False)
+                results["line_coverage"] = cov_results.get("line_coverage", 0.0)
+                results["toggle_coverage"] = cov_results.get("toggle_coverage", 0.0)
+                results["fsm_coverage"] = cov_results.get("fsm_coverage", 0.0)
+                results["comb_coverage"] = cov_results.get("comb_coverage", 0.0)
+                results["total_coverage"] = cov_results.get("total_coverage", 0.0)
+                results["coverage_score"] = cov_results.get("coverage_score", 0.0)
+                results["meets_thresholds"] = cov_results.get("meets_thresholds", False)
+                results["errors"].extend(cov_results.get("errors", []))
+                
+            except Exception as e:
+                results["errors"].append(f"Coverage analysis error: {str(e)}")
+        else:
+            results["errors"].append("Coverage checker module not available")
+        
+        return results
+    
+    def grade(self, include_coverage: bool = True) -> Dict[str, any]:
+        """
+        Complete grading workflow: find assertions, compile, simulate, analyze, coverage.
+        
+        Args:
+            include_coverage: Whether to include coverage analysis in grading
         
         Returns:
             Dictionary with grading results
@@ -418,6 +580,13 @@ class AssertionChecker:
             "assertions_executed": 0,
             "assertion_passes": 0,
             "assertion_failures": 0,
+            # Coverage fields
+            "coverage_analyzed": False,
+            "line_coverage": 0.0,
+            "toggle_coverage": 0.0,
+            "total_coverage": 0.0,
+            "coverage_score": 0.0,
+            "meets_coverage_thresholds": False,
             "score": 0.0,
             "errors": [],
         }
@@ -445,25 +614,66 @@ class AssertionChecker:
             results["errors"].append(f"Simulation failed: {sim_error}")
             return results
         
-        # Step 4: Analyze log
+        # Step 4: Analyze assertion log
         log_stats = self.check_assertions_in_log()
         results["assertions_executed"] = log_stats["assertions_executed"]
         results["assertion_passes"] = log_stats["assertion_passes"]
         results["assertion_failures"] = log_stats["assertion_failures"]
         
-        # Step 5: Calculate score
-        # Score based on: assertions found (30%), compilation (20%), simulation (20%), execution (30%)
-        score = 0.0
-        if total_assertions > 0:
-            score += 30.0  # Has assertions
-        if compile_success:
-            score += 20.0
-        if sim_success:
-            score += 20.0
-        if log_stats["assertions_executed"] > 0:
-            score += 30.0
+        # Step 5: Coverage analysis (optional, using Covered tool)
+        if include_coverage and self.enable_coverage and self.covered_available:
+            coverage_results = self.analyze_coverage()
+            results["coverage_analyzed"] = coverage_results.get("analysis_success", False)
+            results["line_coverage"] = coverage_results.get("line_coverage", 0.0)
+            results["toggle_coverage"] = coverage_results.get("toggle_coverage", 0.0)
+            results["total_coverage"] = coverage_results.get("total_coverage", 0.0)
+            results["coverage_score"] = coverage_results.get("coverage_score", 0.0)
+            results["meets_coverage_thresholds"] = coverage_results.get("meets_thresholds", False)
+            
+            # Add coverage errors (not failures, just info)
+            for error in coverage_results.get("errors", []):
+                if "not installed" not in error.lower():  # Don't penalize for missing tool
+                    results["errors"].append(f"Coverage: {error}")
         
-        results["score"] = score
+        # Step 6: Calculate score
+        # Score breakdown:
+        # - Assertions found: 20%
+        # - Compilation: 15%
+        # - Simulation: 15%
+        # - Assertion execution: 25%
+        # - Coverage (if enabled): 25% (otherwise redistributed)
+        
+        score = 0.0
+        
+        if total_assertions > 0:
+            score += 20.0  # Has assertions
+        
+        if compile_success:
+            score += 15.0
+        
+        if sim_success:
+            score += 15.0
+        
+        if log_stats["assertions_executed"] > 0:
+            score += 25.0
+        
+        # Coverage scoring
+        if include_coverage and results["coverage_analyzed"]:
+            # Scale coverage score (0-100) to 25 points max
+            coverage_contribution = min(results["coverage_score"], 100.0) * 0.25
+            score += coverage_contribution
+        elif not include_coverage or not self.covered_available:
+            # If coverage not available, redistribute points
+            # Give bonus for passing assertions if coverage can't be checked
+            if log_stats["assertions_executed"] > 0 and log_stats["assertion_failures"] == 0:
+                score += 25.0  # All assertions passed, give full points
+            elif log_stats["assertions_executed"] > 0:
+                # Partial credit based on pass rate
+                if log_stats["assertion_passes"] > 0:
+                    pass_rate = log_stats["assertion_passes"] / (log_stats["assertion_passes"] + log_stats["assertion_failures"])
+                    score += 25.0 * pass_rate
+        
+        results["score"] = min(score, 100.0)  # Cap at 100
         
         return results
 
@@ -472,23 +682,34 @@ def grade_generated_testbench(
     testbench_path: str,
     dut_path: Optional[str] = None,
     require_assertions: bool = True,
-    simulator: str = "icarus"
+    simulator: str = "icarus",
+    include_coverage: bool = True,
+    coverage_thresholds: Optional[Dict[str, float]] = None
 ) -> Tuple[bool, Dict[str, any], str]:
     """
-    Grade a generated testbench.
+    Grade a generated testbench with optional coverage analysis.
     
     Args:
         testbench_path: Path to testbench
         dut_path: Optional path to DUT
         require_assertions: Whether assertions are required
         simulator: Simulator to use (icarus, verilator, etc.)
+        include_coverage: Whether to include coverage analysis (requires Covered tool)
+        coverage_thresholds: Optional dict of coverage thresholds 
+                            {"line": 50.0, "toggle": 40.0, "fsm": 60.0, "comb": 30.0}
         
     Returns:
         Tuple of (passed, grade_dict, report_string)
     """
     checker = AssertionChecker(testbench_path, dut_path)
     checker.simulator = simulator
-    results = checker.grade()
+    checker.enable_coverage = include_coverage
+    
+    # Set custom coverage thresholds if provided
+    if coverage_thresholds:
+        checker.coverage_thresholds.update(coverage_thresholds)
+    
+    results = checker.grade(include_coverage=include_coverage)
     
     # Add requirement check
     if require_assertions and results["assertions_found"] == 0:
@@ -502,25 +723,53 @@ Testbench Assertion Grading Report
 ============================================================
 Testbench: {testbench_path}
 Simulator: {simulator}
+
 Code Analysis:
   Has Assertions: {results["assertions_found"] > 0}
   Assertion Count: {results["assertions_found"]}
+
 Compilation:
   Status: {'PASS' if results['compilation_success'] else 'FAIL'}
+
 Simulation:
   Status: {'PASS' if results['simulation_success'] else 'FAIL'}
+
 Assertion Execution:
   Executed: {results['assertions_executed'] > 0}
   Passes: {results['assertion_passes']}
   Failures: {results['assertion_failures']}
-Score: {results['score']:.1f}/100.0
-Result: {'PASS' if results['score'] >= 70.0 else 'FAIL'}
 """
+    
+    # Add coverage section if analyzed
+    if include_coverage:
+        report += f"""
+Coverage Analysis (using Covered):
+  Available: {checker.covered_available}
+  Analyzed: {results.get('coverage_analyzed', False)}
+"""
+        if results.get('coverage_analyzed', False):
+            report += f"""  Line Coverage: {results.get('line_coverage', 0.0):.1f}%
+  Toggle Coverage: {results.get('toggle_coverage', 0.0):.1f}%
+  Total Coverage: {results.get('total_coverage', 0.0):.1f}%
+  Coverage Score: {results.get('coverage_score', 0.0):.1f}/100
+  Meets Thresholds: {results.get('meets_coverage_thresholds', False)}
+"""
+        elif not checker.covered_available:
+            report += """  Note: Install Covered for coverage analysis: sudo apt-get install covered
+"""
+    
+    report += f"""
+============================================================
+Final Score: {results['score']:.1f}/100.0
+Result: {'PASS' if results['score'] >= 70.0 else 'FAIL'}
+============================================================
+"""
+    
     if results["errors"]:
-        report += "\nErrors:\n"
+        report += "\nErrors/Warnings:\n"
         for error in results["errors"]:
             report += f"  - {error}\n"
-    report += "============================================================\n"
+        report += "\n"
     
     # Determine pass/fail
     passed = results["score"] >= 70.0
@@ -532,6 +781,7 @@ Result: {'PASS' if results['score'] >= 70.0 else 'FAIL'}
     results["assertions_work"] = results["assertions_executed"] > 0
     results["compiles"] = results["compilation_success"]
     results["simulates"] = results["simulation_success"]
+    results["has_coverage"] = results.get("coverage_analyzed", False)
     
     return passed, results, report
 
