@@ -7,6 +7,8 @@ This module:
 3. Analyzes simulation logs for assertion execution
 4. Grades testbenches based on assertion coverage
 5. Optionally integrates Covered tool for code coverage analysis
+6. Protocol coverage checking (AXI4 channels)
+7. Bug injection testing (functional correctness)
 """
 
 import os
@@ -22,6 +24,20 @@ try:
     COVERAGE_CHECKER_AVAILABLE = True
 except ImportError:
     COVERAGE_CHECKER_AVAILABLE = False
+
+# Try to import protocol coverage checker
+try:
+    from .protocol_coverage_checker import AXI4ProtocolCoverageChecker
+    PROTOCOL_COVERAGE_AVAILABLE = True
+except ImportError:
+    PROTOCOL_COVERAGE_AVAILABLE = False
+
+# Try to import bug injection tester
+try:
+    from .bug_injection_tester import AXI4BugInjectionTester
+    BUG_INJECTION_AVAILABLE = True
+except ImportError:
+    BUG_INJECTION_AVAILABLE = False
 
 
 class AssertionChecker:
@@ -563,12 +579,14 @@ class AssertionChecker:
         
         return results
     
-    def grade(self, include_coverage: bool = True) -> Dict[str, any]:
+    def grade(self, include_coverage: bool = True, include_protocol: bool = True, include_bug_injection: bool = False) -> Dict[str, any]:
         """
-        Complete grading workflow: find assertions, compile, simulate, analyze, coverage.
+        Complete grading workflow: find assertions, compile, simulate, analyze, coverage, protocol, bugs.
         
         Args:
             include_coverage: Whether to include coverage analysis in grading
+            include_protocol: Whether to include protocol coverage checking
+            include_bug_injection: Whether to include bug injection testing
         
         Returns:
             Dictionary with grading results
@@ -587,7 +605,18 @@ class AssertionChecker:
             "total_coverage": 0.0,
             "coverage_score": 0.0,
             "meets_coverage_thresholds": False,
+            # Protocol coverage fields
+            "protocol_coverage_score": 0.0,
+            "protocol_channels_covered": 0,
+            "protocol_checks_found": 0,
+            "all_required_protocol_checks": False,
+            # Bug injection fields
+            "bug_detection_score": 0.0,
+            "bugs_caught": 0,
+            "bugs_total": 0,
+            # Overall
             "score": 0.0,
+            "score_breakdown": {},
             "errors": [],
         }
         
@@ -620,7 +649,7 @@ class AssertionChecker:
         results["assertion_passes"] = log_stats["assertion_passes"]
         results["assertion_failures"] = log_stats["assertion_failures"]
         
-        # Step 5: Coverage analysis (optional, using Covered tool)
+        # Step 5: Code coverage analysis (optional, using Covered tool)
         if include_coverage and self.enable_coverage and self.covered_available:
             coverage_results = self.analyze_coverage()
             results["coverage_analyzed"] = coverage_results.get("analysis_success", False)
@@ -629,51 +658,102 @@ class AssertionChecker:
             results["total_coverage"] = coverage_results.get("total_coverage", 0.0)
             results["coverage_score"] = coverage_results.get("coverage_score", 0.0)
             results["meets_coverage_thresholds"] = coverage_results.get("meets_thresholds", False)
-            
-            # Add coverage errors (not failures, just info)
-            for error in coverage_results.get("errors", []):
-                if "not installed" not in error.lower():  # Don't penalize for missing tool
-                    results["errors"].append(f"Coverage: {error}")
         
-        # Step 6: Calculate score
-        # Score breakdown:
-        # - Assertions found: 20%
-        # - Compilation: 15%
-        # - Simulation: 15%
-        # - Assertion execution: 25%
-        # - Coverage (if enabled): 25% (otherwise redistributed)
+        # Step 6: Protocol coverage analysis (AXI4 specific)
+        if include_protocol and PROTOCOL_COVERAGE_AVAILABLE:
+            try:
+                protocol_checker = AXI4ProtocolCoverageChecker(self.testbench_path)
+                proto_score, proto_details = protocol_checker.get_coverage_grade()
+                results["protocol_coverage_score"] = proto_score
+                results["protocol_channels_covered"] = proto_details.get("channels_covered", 0)
+                results["protocol_checks_found"] = proto_details.get("checks_found", 0)
+                results["all_required_protocol_checks"] = proto_details.get("all_required_present", False)
+            except Exception as e:
+                results["errors"].append(f"Protocol coverage check failed: {e}")
+        
+        # Step 7: Bug injection testing (functional correctness)
+        # Note: This is expensive, so only run if explicitly enabled
+        if include_bug_injection and BUG_INJECTION_AVAILABLE and self.dut_path:
+            try:
+                dut_files = [f.strip() for f in self.dut_path.split() if f.strip()]
+                tester = AXI4BugInjectionTester(
+                    testbench_path=self.testbench_path,
+                    design_root=".",
+                    dut_files=dut_files,
+                    simulator=self.simulator,
+                )
+                bug_score, bug_details = tester.get_bug_detection_grade()
+                results["bug_detection_score"] = bug_score
+                results["bugs_caught"] = bug_details.get("bugs_caught", 0)
+                results["bugs_total"] = bug_details.get("total_bugs", 0)
+            except Exception as e:
+                results["errors"].append(f"Bug injection test failed: {e}")
+        
+        # Step 8: Calculate comprehensive score
+        # Enhanced score breakdown:
+        # - Assertions found: 15%
+        # - Compilation: 10%
+        # - Simulation: 10%
+        # - Assertion execution: 15%
+        # - Protocol coverage: 25%
+        # - Bug detection OR coverage: 25%
         
         score = 0.0
+        breakdown = {}
         
-        if total_assertions > 0:
-            score += 20.0  # Has assertions
+        # Assertions (15%)
+        if total_assertions >= 5:
+            breakdown["assertions"] = 15.0
+        elif total_assertions > 0:
+            breakdown["assertions"] = min(total_assertions * 3, 15.0)
+        else:
+            breakdown["assertions"] = 0.0
+        score += breakdown["assertions"]
         
-        if compile_success:
-            score += 15.0
+        # Compilation (10%)
+        breakdown["compilation"] = 10.0 if compile_success else 0.0
+        score += breakdown["compilation"]
         
-        if sim_success:
-            score += 15.0
+        # Simulation (10%)
+        breakdown["simulation"] = 10.0 if sim_success else 0.0
+        score += breakdown["simulation"]
         
+        # Assertion execution (15%)
         if log_stats["assertions_executed"] > 0:
-            score += 25.0
+            breakdown["execution"] = 15.0
+        else:
+            breakdown["execution"] = 0.0
+        score += breakdown["execution"]
         
-        # Coverage scoring
-        if include_coverage and results["coverage_analyzed"]:
-            # Scale coverage score (0-100) to 25 points max
-            coverage_contribution = min(results["coverage_score"], 100.0) * 0.25
-            score += coverage_contribution
-        elif not include_coverage or not self.covered_available:
-            # If coverage not available, redistribute points
-            # Give bonus for passing assertions if coverage can't be checked
+        # Protocol coverage (25%)
+        if include_protocol and results["protocol_coverage_score"] > 0:
+            breakdown["protocol"] = min(results["protocol_coverage_score"] * 0.25, 25.0)
+        else:
+            # Fallback: give points for having assertions in multiple categories
             if log_stats["assertions_executed"] > 0 and log_stats["assertion_failures"] == 0:
-                score += 25.0  # All assertions passed, give full points
-            elif log_stats["assertions_executed"] > 0:
-                # Partial credit based on pass rate
-                if log_stats["assertion_passes"] > 0:
-                    pass_rate = log_stats["assertion_passes"] / (log_stats["assertion_passes"] + log_stats["assertion_failures"])
-                    score += 25.0 * pass_rate
+                breakdown["protocol"] = 15.0  # Reduced fallback
+            else:
+                breakdown["protocol"] = 0.0
+        score += breakdown["protocol"]
+        
+        # Bug detection OR code coverage (25%)
+        if include_bug_injection and results["bug_detection_score"] > 0:
+            breakdown["functional"] = min(results["bug_detection_score"] * 0.25, 25.0)
+        elif include_coverage and results["coverage_analyzed"]:
+            breakdown["functional"] = min(results["coverage_score"] * 0.25, 25.0)
+        else:
+            # Fallback: give partial points for passing assertions
+            if log_stats["assertions_executed"] > 0 and log_stats["assertion_failures"] == 0:
+                breakdown["functional"] = 15.0  # Reduced fallback
+            elif log_stats["assertion_passes"] > 0:
+                pass_rate = log_stats["assertion_passes"] / max(log_stats["assertion_passes"] + log_stats["assertion_failures"], 1)
+                breakdown["functional"] = 15.0 * pass_rate
+            else:
+                breakdown["functional"] = 0.0
+        score += breakdown["functional"]
         
         results["score"] = min(score, 100.0)  # Cap at 100
+        results["score_breakdown"] = breakdown
         
         return results
 
@@ -684,17 +764,21 @@ def grade_generated_testbench(
     require_assertions: bool = True,
     simulator: str = "icarus",
     include_coverage: bool = True,
+    include_protocol: bool = True,
+    include_bug_injection: bool = False,
     coverage_thresholds: Optional[Dict[str, float]] = None
 ) -> Tuple[bool, Dict[str, any], str]:
     """
-    Grade a generated testbench with optional coverage analysis.
+    Grade a generated testbench with comprehensive analysis.
     
     Args:
         testbench_path: Path to testbench
         dut_path: Optional path to DUT
         require_assertions: Whether assertions are required
         simulator: Simulator to use (icarus, verilator, etc.)
-        include_coverage: Whether to include coverage analysis (requires Covered tool)
+        include_coverage: Whether to include code coverage analysis (requires Covered tool)
+        include_protocol: Whether to include protocol coverage checking (AXI4)
+        include_bug_injection: Whether to include bug injection testing (expensive)
         coverage_thresholds: Optional dict of coverage thresholds 
                             {"line": 50.0, "toggle": 40.0, "fsm": 60.0, "comb": 30.0}
         
@@ -709,7 +793,11 @@ def grade_generated_testbench(
     if coverage_thresholds:
         checker.coverage_thresholds.update(coverage_thresholds)
     
-    results = checker.grade(include_coverage=include_coverage)
+    results = checker.grade(
+        include_coverage=include_coverage,
+        include_protocol=include_protocol,
+        include_bug_injection=include_bug_injection,
+    )
     
     # Add requirement check
     if require_assertions and results["assertions_found"] == 0:
@@ -719,7 +807,7 @@ def grade_generated_testbench(
     # Create formatted report
     report = f"""
 ============================================================
-Testbench Assertion Grading Report
+Testbench Comprehensive Grading Report
 ============================================================
 Testbench: {testbench_path}
 Simulator: {simulator}
@@ -740,10 +828,30 @@ Assertion Execution:
   Failures: {results['assertion_failures']}
 """
     
+    # Add protocol coverage section
+    if include_protocol:
+        report += f"""
+Protocol Coverage (AXI4):
+  Available: {PROTOCOL_COVERAGE_AVAILABLE}
+  Score: {results.get('protocol_coverage_score', 0.0):.1f}%
+  Channels Covered: {results.get('protocol_channels_covered', 0)}/5
+  Protocol Checks: {results.get('protocol_checks_found', 0)}
+  All Required Present: {results.get('all_required_protocol_checks', False)}
+"""
+    
+    # Add bug injection section
+    if include_bug_injection:
+        report += f"""
+Bug Detection (Functional Correctness):
+  Available: {BUG_INJECTION_AVAILABLE}
+  Score: {results.get('bug_detection_score', 0.0):.1f}%
+  Bugs Caught: {results.get('bugs_caught', 0)}/{results.get('bugs_total', 0)}
+"""
+    
     # Add coverage section if analyzed
     if include_coverage:
         report += f"""
-Coverage Analysis (using Covered):
+Code Coverage (using Covered):
   Available: {checker.covered_available}
   Analyzed: {results.get('coverage_analyzed', False)}
 """
@@ -757,6 +865,14 @@ Coverage Analysis (using Covered):
         elif not checker.covered_available:
             report += """  Note: Install Covered for coverage analysis: sudo apt-get install covered
 """
+    
+    # Add score breakdown
+    if results.get("score_breakdown"):
+        report += f"""
+Score Breakdown:
+"""
+        for component, points in results["score_breakdown"].items():
+            report += f"  {component}: {points:.1f}\n"
     
     report += f"""
 ============================================================
@@ -782,8 +898,8 @@ Result: {'PASS' if results['score'] >= 70.0 else 'FAIL'}
     results["compiles"] = results["compilation_success"]
     results["simulates"] = results["simulation_success"]
     results["has_coverage"] = results.get("coverage_analyzed", False)
+    results["has_protocol_coverage"] = results.get("protocol_coverage_score", 0) > 0
+    results["has_bug_detection"] = results.get("bug_detection_score", 0) > 0
     
     return passed, results, report
-
-
 
