@@ -537,8 +537,8 @@ module axi4_top_tb_golden;
     
     // Coverage and monitoring
     initial begin
-        $dumpfile("axi4_top_tb.vcd");
-        $dumpvars(0, axi4_top_tb);
+        $dumpfile("axi4_top_tb_golden.vcd");
+        $dumpvars(0, axi4_top_tb_golden);
         $display("==========================================");
         $display("AXI4 Golden Testbench Started");
         $display("Testing: axi4_top, axi4_master, axi4_slave, axi4_interrupt");
@@ -577,4 +577,5 @@ module axi4_top_tb_golden;
     end
 
 endmodule
+
 
