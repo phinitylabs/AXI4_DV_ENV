@@ -15,7 +15,7 @@ from pathlib import Path
 from checkers.testbench_assertion_checker import grade_generated_testbench, AssertionChecker
 
 # Fetch environment variables
-testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_top_tb.sv")
+testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_top_tb_golden.sv")
 dut_path = os.getenv("DUT_PATH", "sources/axi4_top.sv sources/axi4_master.sv sources/axi4_slave.sv sources/axi4_interrupt.sv")
 simulator = os.getenv("SIM", "icarus")
 require_assertions = os.getenv("REQUIRE_ASSERTIONS", "true").lower() == "true"
@@ -209,4 +209,5 @@ def test_quick_assertion_check():
     
     if require_assertions:
         assert code_check['has_assertions'], "No assertions found in testbench"
+
 
