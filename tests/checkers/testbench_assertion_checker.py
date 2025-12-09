@@ -593,7 +593,7 @@ class AssertionChecker:
         
         # Step 1: Find assertions
         assertions = self.find_assertions()
-        total_assertions = len(assertions["immediate"]) + len(assertions["concurrent"])
+      total_assertions = len(assertions["immediate"]) + len(assertions["concurrent"]) + len(assertions.get("manual", []))
         results["assertions_found"] = total_assertions
         
         if total_assertions == 0:
@@ -784,4 +784,5 @@ Result: {'PASS' if results['score'] >= 70.0 else 'FAIL'}
     results["has_coverage"] = results.get("coverage_analyzed", False)
     
     return passed, results, report
+
 
