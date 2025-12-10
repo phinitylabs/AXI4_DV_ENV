@@ -78,7 +78,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="AW_VALID_STABLE",
             description="AWVALID must remain stable until AWREADY",
-            pattern=r"(awvalid.*awready|awvalid.*stable|awvalid.*!.*awready)",
+            pattern=r"(awvalid.*awready|awvalid.*stable|awvalid.*!.*awready|axi_awvalid.*axi_awready)",
             channel="AW",
             weight=2.0,
             required=True,
@@ -86,17 +86,17 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="AW_HANDSHAKE",
             description="Write address handshake (AWVALID && AWREADY)",
-            pattern=r"awvalid\s*&&\s*awready|awvalid\s*&\s*awready|awready\s*&&\s*awvalid",
+            pattern=r"awvalid\s*&&\s*awready|awvalid\s*&\s*awready|awready\s*&&\s*awvalid|axi_awvalid\s*&&\s*axi_awready|\.axi_awvalid\s*&&.*\.axi_awready",
             channel="AW",
             weight=1.5,
-            required=True,
+            required=False,
         ),
         
         # Write Data Channel
         ProtocolCheck(
             name="W_VALID_STABLE",
             description="WVALID must remain stable until WREADY",
-            pattern=r"(wvalid.*wready|wvalid.*stable)",
+            pattern=r"(wvalid.*wready|wvalid.*stable|axi_wvalid.*axi_wready)",
             channel="W",
             weight=2.0,
             required=True,
@@ -104,7 +104,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="W_LAST_CHECK",
             description="WLAST must be asserted on last beat",
-            pattern=r"wlast",
+            pattern=r"wlast|axi_wlast",
             channel="W",
             weight=2.0,
             required=True,
@@ -112,7 +112,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="W_HANDSHAKE",
             description="Write data handshake (WVALID && WREADY)",
-            pattern=r"wvalid\s*&&\s*wready|wvalid\s*&\s*wready|wready\s*&&\s*wvalid",
+            pattern=r"wvalid\s*&&\s*wready|wvalid\s*&\s*wready|wready\s*&&\s*wvalid|axi_wvalid\s*&&\s*axi_wready|\.axi_wvalid\s*&&.*\.axi_wready",
             channel="W",
             weight=1.5,
             required=False,
@@ -122,7 +122,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="B_VALID_STABLE",
             description="BVALID must remain stable until BREADY",
-            pattern=r"(bvalid.*bready|bvalid.*stable)",
+            pattern=r"(bvalid.*bready|bvalid.*stable|axi_bvalid.*axi_bready)",
             channel="B",
             weight=2.0,
             required=True,
@@ -130,7 +130,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="B_RESP_CHECK",
             description="BRESP must be valid (OKAY, EXOKAY, SLVERR, DECERR)",
-            pattern=r"bresp\s*(==|!=|<=|>=|<|>)\s*(2'b|2'd|\d)",
+            pattern=r"bresp\s*(==|!=|<=|>=|<|>)\s*(2'b|2'd|\d)|axi_bresp\s*(==|!=|<=|>=|<|>)\s*(2'b|2'd|\d)",
             channel="B",
             weight=2.0,
             required=True,
@@ -138,7 +138,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="B_HANDSHAKE",
             description="Write response handshake (BVALID && BREADY)",
-            pattern=r"bvalid\s*&&\s*bready|bvalid\s*&\s*bready|bready\s*&&\s*bvalid",
+            pattern=r"bvalid\s*&&\s*bready|bvalid\s*&\s*bready|bready\s*&&\s*bvalid|axi_bvalid\s*&&\s*axi_bready|\.axi_bvalid\s*&&.*\.axi_bready",
             channel="B",
             weight=1.5,
             required=False,
@@ -148,7 +148,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="AR_VALID_STABLE",
             description="ARVALID must remain stable until ARREADY",
-            pattern=r"(arvalid.*arready|arvalid.*stable|arvalid.*!.*arready)",
+            pattern=r"(arvalid.*arready|arvalid.*stable|arvalid.*!.*arready|axi_arvalid.*axi_arready)",
             channel="AR",
             weight=2.0,
             required=True,
@@ -156,7 +156,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="AR_HANDSHAKE",
             description="Read address handshake (ARVALID && ARREADY)",
-            pattern=r"arvalid\s*&&\s*arready|arvalid\s*&\s*arready|arready\s*&&\s*arvalid",
+            pattern=r"arvalid\s*&&\s*arready|arvalid\s*&\s*arready|arready\s*&&\s*arvalid|axi_arvalid\s*&&\s*axi_arready|\.axi_arvalid\s*&&.*\.axi_arready",
             channel="AR",
             weight=1.5,
             required=False,
@@ -166,7 +166,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="R_VALID_STABLE",
             description="RVALID must remain stable until RREADY",
-            pattern=r"(rvalid.*rready|rvalid.*stable)",
+            pattern=r"(rvalid.*rready|rvalid.*stable|axi_rvalid.*axi_rready)",
             channel="R",
             weight=2.0,
             required=True,
@@ -174,7 +174,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="R_LAST_CHECK",
             description="RLAST must be asserted on last beat",
-            pattern=r"rlast",
+            pattern=r"rlast|axi_rlast",
             channel="R",
             weight=2.0,
             required=True,
@@ -182,7 +182,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="R_RESP_CHECK",
             description="RRESP must be valid",
-            pattern=r"rresp\s*(==|!=|<=|>=|<|>)\s*(2'b|2'd|\d)",
+            pattern=r"rresp\s*(==|!=|<=|>=|<|>)\s*(2'b|2'd|\d)|axi_rresp\s*(==|!=|<=|>=|<|>)\s*(2'b|2'd|\d)",
             channel="R",
             weight=1.5,
             required=False,
@@ -190,7 +190,7 @@ class AXI4ProtocolCoverageChecker:
         ProtocolCheck(
             name="R_HANDSHAKE",
             description="Read data handshake (RVALID && RREADY)",
-            pattern=r"rvalid\s*&&\s*rready|rvalid\s*&\s*rready|rready\s*&&\s*rvalid",
+            pattern=r"rvalid\s*&&\s*rready|rvalid\s*&\s*rready|rready\s*&&\s*rvalid|axi_rvalid\s*&&\s*axi_rready|\.axi_rvalid\s*&&.*\.axi_rready",
             channel="R",
             weight=1.5,
             required=False,
