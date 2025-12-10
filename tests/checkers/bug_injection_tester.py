@@ -81,14 +81,15 @@ class AXI4BugInjectionTester:
     # Common AXI4 bugs to inject
     # These are designed to be caught by proper protocol assertions
     # NOTE: Patterns must match the actual RTL code in sources/
+    # IMPORTANT: Avoid #delay which causes timescale issues in Icarus
     AXI4_BUGS = [
-        # Write Address Channel bugs
+        # Write Address Channel bugs - change signal to always 0 (never valid)
         BugVariant(
-            name="AW_VALID_DROPS_EARLY",
-            description="AWVALID drops before AWREADY (protocol violation)",
+            name="AW_VALID_NEVER_ASSERTS",
+            description="AWVALID never asserts (no write transactions)",
             file_to_modify="sources/axi4_master.sv",
             search_pattern=r"(axi_awvalid\s*<=\s*1'b1;)",
-            replacement=r"axi_awvalid <= 1'b1; #1 axi_awvalid <= 1'b0; #1 axi_awvalid <= 1'b1; // BUG: unstable AWVALID",
+            replacement=r"axi_awvalid <= 1'b0; // BUG: AWVALID never asserts",
             expected_assertion_failure="AWVALID",
             severity="high",
             channel="AW",
@@ -120,23 +121,23 @@ class AXI4BugInjectionTester:
             channel="B",
         ),
         BugVariant(
-            name="B_VALID_DROPS_EARLY",
-            description="BVALID drops before BREADY (protocol violation)",
+            name="B_VALID_NEVER_ASSERTS",
+            description="BVALID never asserts (no write responses)",
             file_to_modify="sources/axi4_slave.sv",
             search_pattern=r"(axi_bvalid\s*<=\s*1'b1;)",
-            replacement=r"axi_bvalid <= 1'b1; #1 axi_bvalid <= 1'b0; // BUG: unstable BVALID",
+            replacement=r"axi_bvalid <= 1'b0; // BUG: BVALID never asserts",
             expected_assertion_failure="BVALID",
             severity="high",
             channel="B",
         ),
         
-        # Read Address Channel bugs
+        # Read Address Channel bugs - change signal to always 0
         BugVariant(
-            name="AR_VALID_DROPS_EARLY",
-            description="ARVALID drops before ARREADY (protocol violation)",
+            name="AR_VALID_NEVER_ASSERTS",
+            description="ARVALID never asserts (no read transactions)",
             file_to_modify="sources/axi4_master.sv",
             search_pattern=r"(axi_arvalid\s*<=\s*1'b1;)",
-            replacement=r"axi_arvalid <= 1'b1; #1 axi_arvalid <= 1'b0; #1 axi_arvalid <= 1'b1; // BUG: unstable ARVALID",
+            replacement=r"axi_arvalid <= 1'b0; // BUG: ARVALID never asserts",
             expected_assertion_failure="ARVALID",
             severity="high",
             channel="AR",
