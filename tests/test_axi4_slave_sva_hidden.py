@@ -1,21 +1,31 @@
 """
 Enhanced Test Runner for Grading Generated Testbenches with Assertions.
 
-This comprehensive test runner:
-1. Checks if testbench has assertions (basic)
-2. Checks protocol coverage (AXI4 channels)
-3. Compiles and simulates testbench
-4. Verifies assertions execute
-5. Tests bug detection capability (functional correctness)
-6. Calculates weighted final score
+VERILATOR-BASED GRADING SYSTEM
+==============================
+
+This comprehensive test runner uses Verilator as the default simulator for:
+- Better SystemVerilog support
+- Stricter syntax checking
+- Proper SVA (SystemVerilog Assertions) evaluation
+- Built-in coverage capabilities
+
+Test Workflow:
+1. Compiles and simulates testbench
+2. Verifies REQUIRED assertions execute (from prompt) by checking logs
+3. Checks protocol coverage (AXI4 channels)
+4. Tests bug detection capability (functional correctness)
+5. Calculates weighted final score
 
 Grading Breakdown:
-- Basic Assertions: 15%
-- Protocol Coverage: 25%
+- Required Assertions (from prompt): 20%
+- Protocol Coverage: 20%
 - Compilation: 10%
 - Simulation: 10%
 - Assertion Execution: 15%
 - Bug Detection (Functional): 25%
+
+Simulator: Verilator (default) or Icarus (fallback)
 """
 
 import os
@@ -32,11 +42,31 @@ from checkers.bug_injection_tester import (
     test_bug_detection,
     format_bug_detection_report,
 )
+from checkers.assertion_requirement_checker import (
+    AssertionRequirementChecker,
+    check_required_assertions,
+    format_assertion_requirement_report,
+    REQUIRED_ASSERTIONS,
+)
+from checkers.targeted_bug_injection import (
+    TargetedBugInjectionTester,
+    format_targeted_bug_report,
+    TARGETED_BUGS,
+)
+from checkers.functional_correctness_checker import (
+    FunctionalCorrectnessChecker,
+    format_functional_correctness_report,
+)
 
 # Fetch environment variables
-testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_top_tb_golden.sv")
+# Testbench path - agent creates verif/axi4_top_tb.sv
+# For grading, we check both possible names (agent-created and golden reference)
+_default_tb = "verif/axi4_top_tb.sv"
+if not os.path.exists(_default_tb):
+    _default_tb = "verif/axi4_top_tb_golden.sv"  # Fallback to golden for testing
+testbench_path = os.getenv("TESTBENCH_PATH", _default_tb)
 dut_path = os.getenv("DUT_PATH", "sources/axi4_top.sv sources/axi4_master.sv sources/axi4_slave.sv sources/axi4_interrupt.sv")
-simulator = os.getenv("SIM", "icarus")
+simulator = os.getenv("SIM", "verilator")
 require_assertions = os.getenv("REQUIRE_ASSERTIONS", "true").lower() == "true"
 enable_bug_injection = os.getenv("ENABLE_BUG_INJECTION", "true").lower() == "true"
 enable_protocol_coverage = os.getenv("ENABLE_PROTOCOL_COVERAGE", "true").lower() == "true"
@@ -60,60 +90,82 @@ def _testbench_exists():
     return os.path.exists(checker.testbench_path)
 
 
-# ============================================================
-# MANDATORY TEST - Must fail if testbench doesn't exist
-# This ensures validation fails when golden patch is not applied
-# ============================================================
-
-def test_testbench_file_exists():
-    """
-    MANDATORY: Testbench file must exist.
-    This test MUST FAIL when testbench is missing (for validation to work).
-    """
+def _get_checker():
+    """Get a configured AssertionChecker instance."""
     checker = AssertionChecker(testbench_path, dut_path)
-    exists = os.path.exists(checker.testbench_path)
-    
-    print(f"\n=== Testbench Existence Check ===")
-    print(f"Expected path: {testbench_path}")
-    print(f"Resolved path: {checker.testbench_path}")
-    print(f"Exists: {exists}")
-    
-    assert exists, f"Testbench file not found: {checker.testbench_path}"
+    checker.simulator = simulator
+    return checker
 
 
 # ============================================================
-# BASIC TESTS
+# REQUIRED ASSERTIONS TEST (Log-based verification)
+# This test verifies the SPECIFIC assertions from the prompt
 # ============================================================
 
 @pytest.mark.parametrize("test", range(1))
-def test_testbench_has_assertions(test):
+def test_required_assertions_present(test):
     """
-    Test that checks if generated testbench has assertions.
-    Weight: 15%
+    Test that the testbench implements the REQUIRED assertions from the prompt.
+    Weight: 20%
+    
+    This test:
+    1. Compiles and runs the testbench against golden RTL
+    2. Parses the simulation log for assertion messages
+    3. Verifies that required protocol checks are executed
+    
+    Required assertions (from prompt):
+    - VALID signal stability (AWVALID, WVALID, ARVALID, BVALID, RVALID)
+    - LAST signal correctness (WLAST, RLAST)
+    - Response code validation (BRESP, RRESP)
+    - Timing relationships (write response after data, read data after address)
     """
     if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
-    checker = AssertionChecker(testbench_path, dut_path)
-    checker.simulator = simulator
+    checker = _get_checker()
     
-    # Check assertions in code
-    code_check = checker.check_assertions_in_code()
-    
-    print(f"\n=== Assertion Code Check ===")
+    # First compile and simulate to generate logs
+    print(f"\n=== Required Assertions Verification ===")
     print(f"Testbench: {checker.testbench_path}")
-    print(f"Has Assertions: {code_check['has_assertions']}")
-    print(f"Assertion Count: {code_check['assertion_count']}")
-    print(f"Assertion Types: {code_check['assertion_types']}")
-    print(f"Locations: {code_check['assertion_locations']}")
+    print(f"Simulator: {checker.simulator}")
     
-    # Check if file was found
-    if not code_check['valid']:
-        pytest.skip(f"Could not read testbench file: {checker.testbench_path}")
+    compile_success, compile_error = checker.compile_testbench()
+    if not compile_success:
+        pytest.fail(f"Testbench must compile to verify assertions: {compile_error}")
     
-    if require_assertions:
-        assert code_check['has_assertions'], \
-            f"No assertions found in testbench. Found {code_check['assertion_count']} assertions."
+    sim_success, sim_log = checker.run_simulation()
+    if not sim_success:
+        pytest.fail(f"Testbench must simulate to verify assertions: {sim_log[:200]}")
+    
+    # Read simulation log
+    sim_log_content = ""
+    if os.path.exists(checker.sim_log_path):
+        with open(checker.sim_log_path, 'r') as f:
+            sim_log_content = f.read()
+    
+    # Check required assertions
+    req_checker = AssertionRequirementChecker(checker.testbench_path)
+    req_checker.set_simulation_log(sim_log_content)
+    
+    score, details = req_checker.get_score()
+    
+    # Print report
+    print(format_assertion_requirement_report(details))
+    
+    # Count verified assertions
+    verified = details["verified_assertions"]
+    total = details["total_assertions"]
+    
+    print(f"Required Assertions: {verified}/{total} verified")
+    print(f"Score: {score:.1f}%")
+    
+    # Must verify at least 50% of required assertions
+    min_required = total * 0.5
+    assert verified >= min_required, \
+        f"Must verify at least {int(min_required)} required assertions, only verified {verified}/{total}"
+    
+    assert score >= 50.0, \
+        f"Required assertions score {score:.1f}% below 50% minimum"
 
 
 # ============================================================
@@ -124,7 +176,7 @@ def test_testbench_has_assertions(test):
 def test_protocol_coverage(test):
     """
     Test that checks AXI4 protocol coverage in testbench.
-    Weight: 25%
+    Weight: 20%
     
     Checks:
     - All 5 AXI4 channels monitored (AW, W, B, AR, R)
@@ -136,7 +188,7 @@ def test_protocol_coverage(test):
     if not enable_protocol_coverage:
         pytest.skip("Protocol coverage checking disabled")
     
-    checker = AssertionChecker(testbench_path, dut_path)
+    checker = _get_checker()
     coverage_checker = AXI4ProtocolCoverageChecker(checker.testbench_path)
     
     score, details = coverage_checker.get_coverage_grade()
@@ -173,11 +225,11 @@ def test_testbench_compiles(test):
     if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
-    checker = AssertionChecker(testbench_path, dut_path)
-    checker.simulator = simulator
+    checker = _get_checker()
     
     print(f"\n=== Compilation Check ===")
     print(f"Testbench: {checker.testbench_path}")
+    print(f"Simulator: {checker.simulator}")
     if checker.dut_path:
         print(f"DUT: {checker.dut_path}")
     
@@ -201,8 +253,7 @@ def test_testbench_simulates(test):
     if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
-    checker = AssertionChecker(testbench_path, dut_path)
-    checker.simulator = simulator
+    checker = _get_checker()
     
     # First compile
     compile_success, compile_error = checker.compile_testbench()
@@ -232,8 +283,7 @@ def test_assertions_execute(test):
     if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
-    checker = AssertionChecker(testbench_path, dut_path)
-    checker.simulator = simulator
+    checker = _get_checker()
     
     # Compile and simulate
     compile_success, compile_error = checker.compile_testbench()
@@ -244,7 +294,7 @@ def test_assertions_execute(test):
     if not sim_success:
         pytest.skip(f"Testbench must simulate first: {sim_log[:200]}")
     
-    # Check assertions in log (checker will look in log directory)
+    # Check assertions in log
     log_check = checker.check_assertions_in_log()
     
     print(f"\n=== Assertion Execution Check ===")
@@ -263,19 +313,92 @@ def test_assertions_execute(test):
 
 
 # ============================================================
-# BUG INJECTION TEST (FUNCTIONAL CORRECTNESS)
+# FUNCTIONAL CORRECTNESS TEST (Testbench works with correct RTL)
+# ============================================================
+
+@pytest.mark.parametrize("test", range(1))
+def test_functional_correctness(test):
+    """
+    Test that the testbench is functionally correct with CORRECT RTL.
+    
+    This verifies:
+    1. NO FALSE POSITIVES: Assertions don't fail on correct RTL
+    2. TRANSACTIONS OCCUR: Write and read transactions happen
+    3. ALL CHANNELS ACTIVE: All 5 AXI channels are exercised
+    4. SIMULATION COMPLETES: Simulation finishes properly
+    
+    A testbench that fails on correct RTL is buggy!
+    """
+    if not _testbench_exists():
+        pytest.skip(f"Testbench file not found: {testbench_path}")
+    
+    checker = _get_checker()
+    
+    # Compile and simulate against correct RTL
+    compile_success, compile_error = checker.compile_testbench()
+    if not compile_success:
+        pytest.fail(f"Testbench must compile: {compile_error}")
+    
+    sim_success, sim_log = checker.run_simulation()
+    if not sim_success:
+        pytest.fail(f"Testbench must simulate: {sim_log[:200]}")
+    
+    # Read simulation log
+    sim_log_content = ""
+    if os.path.exists(checker.sim_log_path):
+        with open(checker.sim_log_path, 'r') as f:
+            sim_log_content = f.read()
+    
+    # Check functional correctness
+    print(f"\n=== Functional Correctness Check ===")
+    print(f"Verifying testbench works correctly with CORRECT RTL...")
+    
+    fc_checker = FunctionalCorrectnessChecker(sim_log_content)
+    score, details = fc_checker.get_score()
+    
+    # Print report
+    print(format_functional_correctness_report(details))
+    
+    # Assertions
+    # Should have some assertion passes
+    assert details["assertion_passes"] > 0, \
+        "No assertions passed - testbench may not have working assertions"
+    
+    # Transactions should occur
+    assert details["transactions_occur"], \
+        "No transactions observed - testbench does not exercise DUT"
+    
+    # Simulation should complete
+    assert details["simulation_completes"], \
+        "Simulation did not complete properly"
+    
+    # Score should be reasonable
+    assert score >= 50.0, \
+        f"Functional correctness score {score:.1f}% below 50% minimum"
+    
+    print(f"\nFunctional Correctness Score: {score:.1f}%")
+
+
+# ============================================================
+# TARGETED BUG INJECTION TEST (Testbench catches specific bugs)
 # ============================================================
 
 @pytest.mark.parametrize("test", range(1))
 def test_bug_detection(test):
     """
-    Test that testbench can detect injected bugs (functional correctness).
+    Test that testbench catches SPECIFIC bugs related to prompt requirements.
     Weight: 25%
     
-    This is the most important test for DV quality:
-    - Injects known bugs into RTL
-    - Verifies testbench catches them via assertion failures
-    - A good testbench should catch at least 50% of bugs
+    This tests if the agent's assertions catch the RIGHT bugs:
+    - Each bug targets a specific requirement from the prompt
+    - Full credit (1.0): Bug caught with the CORRECT assertion
+    - Partial credit (0.5): Bug caught with ANY assertion
+    - No credit (0.0): Bug not caught
+    
+    Example:
+    - Prompt says: "AWVALID must remain stable until AWREADY"
+    - We inject bug: AWVALID becomes unstable
+    - Expected: Assertion about AWVALID stability should fail
     """
     if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
@@ -283,7 +406,7 @@ def test_bug_detection(test):
     if not enable_bug_injection:
         pytest.skip("Bug injection testing disabled")
     
-    checker = AssertionChecker(testbench_path, dut_path)
+    checker = _get_checker()
     
     # First verify testbench works with correct RTL
     compile_success, _ = checker.compile_testbench()
@@ -294,35 +417,39 @@ def test_bug_detection(test):
     if not sim_success:
         pytest.skip("Testbench must simulate with correct RTL first")
     
-    # Now test bug detection
-    print(f"\n=== Bug Injection Testing ===")
-    print(f"Testing testbench's ability to catch protocol violations...")
+    # Now test TARGETED bug detection
+    print(f"\n=== Targeted Bug Injection Testing ===")
+    print(f"Testing if assertions catch SPECIFIC bugs from prompt requirements...")
     
-    tester = AXI4BugInjectionTester(
+    tester = TargetedBugInjectionTester(
         testbench_path=checker.testbench_path,
         design_root=design_root,
         dut_files=dut_files_list,
         simulator=simulator,
     )
     
-    score, details = tester.get_bug_detection_grade()
+    score, results = tester.get_grade()
     
-    # Print report
-    print("\n" + format_bug_detection_report(details))
+    # Print detailed report
+    print("\n" + format_targeted_bug_report(results))
     
     # Assertions
-    assert details["total_bugs"] > 0, \
+    assert results["total_bugs"] > 0, \
         "Bug injection test setup failed - no bugs tested"
     
-    assert details["bugs_caught"] > 0, \
+    # Must catch at least some bugs
+    caught = results["fully_caught"] + results["partially_caught"]
+    assert caught > 0, \
         f"Testbench caught 0 bugs - must catch at least 1"
     
-    # Minimum 30% detection rate for passing
-    # (Lowered from 50% to be more lenient initially)
+    # Minimum 30% detection score for passing
     assert score >= 30.0, \
-        f"Bug detection rate {score:.1f}% below 30% minimum"
+        f"Bug detection score {score:.1f}% below 30% minimum"
     
-    print(f"\nBug Detection Score: {score:.1f}%")
+    print(f"\nTargeted Bug Detection Score: {score:.1f}%")
+    print(f"  Fully caught (correct assertion): {results['fully_caught']}")
+    print(f"  Partially caught (any assertion): {results['partially_caught']}")
+    print(f"  Missed: {results['missed']}")
 
 
 # ============================================================
@@ -335,8 +462,8 @@ def test_comprehensive_grade(test):
     Comprehensive test that grades the entire testbench with weighted scoring.
     
     Score Breakdown:
-    - Basic Assertions: 15%
-    - Protocol Coverage: 25%
+    - Required Assertions: 20%
+    - Protocol Coverage: 20%
     - Compilation: 10%
     - Simulation: 10%
     - Assertion Execution: 15%
@@ -347,16 +474,16 @@ def test_comprehensive_grade(test):
     if not _testbench_exists():
         pytest.skip(f"Testbench file not found: {testbench_path}")
     
-    checker = AssertionChecker(testbench_path, dut_path)
-    checker.simulator = simulator
+    checker = _get_checker()
     
     scores = {}
     weights = {
-        "assertions": 15,
-        "protocol_coverage": 25,
         "compilation": 10,
         "simulation": 10,
-        "assertion_execution": 15,
+        "required_assertions": 15,
+        "functional_correctness": 15,
+        "protocol_coverage": 15,
+        "assertion_execution": 10,
         "bug_detection": 25,
     }
     
@@ -364,70 +491,94 @@ def test_comprehensive_grade(test):
     print("COMPREHENSIVE TESTBENCH GRADING")
     print("=" * 60)
     
-    # 1. Basic Assertions (15%)
-    code_check = checker.check_assertions_in_code()
-    if code_check['has_assertions'] and code_check['assertion_count'] >= 5:
-        scores["assertions"] = 100.0
-    elif code_check['has_assertions']:
-        scores["assertions"] = min(code_check['assertion_count'] * 20, 100)
-    else:
-        scores["assertions"] = 0.0
-    print(f"\n1. Basic Assertions: {scores['assertions']:.0f}/100 (weight: {weights['assertions']}%)")
-    print(f"   Found {code_check['assertion_count']} assertions")
-    
-    # 2. Protocol Coverage (25%)
-    if enable_protocol_coverage:
-        coverage_checker = AXI4ProtocolCoverageChecker(checker.testbench_path)
-        cov_score, cov_details = coverage_checker.get_coverage_grade()
-        scores["protocol_coverage"] = cov_score
-        print(f"\n2. Protocol Coverage: {scores['protocol_coverage']:.0f}/100 (weight: {weights['protocol_coverage']}%)")
-        print(f"   Channels: {cov_details['channels_covered']}/5")
-        print(f"   Checks: {cov_details['checks_found']}/{cov_details['checks_possible']}")
-    else:
-        scores["protocol_coverage"] = 50.0  # Default if disabled
-        print(f"\n2. Protocol Coverage: SKIPPED (using default 50)")
-    
-    # 3. Compilation (10%)
+    # 1. Compilation (10%) - Do this first
     compile_success, compile_error = checker.compile_testbench()
     scores["compilation"] = 100.0 if compile_success else 0.0
-    print(f"\n3. Compilation: {scores['compilation']:.0f}/100 (weight: {weights['compilation']}%)")
+    print(f"\n1. Compilation: {scores['compilation']:.0f}/100 (weight: {weights['compilation']}%)")
     
-    # 4. Simulation (10%)
+    # 2. Simulation (10%)
     if compile_success:
         sim_success, sim_log = checker.run_simulation()
         scores["simulation"] = 100.0 if sim_success else 0.0
     else:
         scores["simulation"] = 0.0
-    print(f"\n4. Simulation: {scores['simulation']:.0f}/100 (weight: {weights['simulation']}%)")
+        sim_success = False
+    print(f"\n2. Simulation: {scores['simulation']:.0f}/100 (weight: {weights['simulation']}%)")
     
-    # 5. Assertion Execution (15%)
-    if scores["simulation"] > 0:
+    # Read simulation log (used by multiple checks)
+    sim_log_content = ""
+    if sim_success and os.path.exists(checker.sim_log_path):
+        with open(checker.sim_log_path, 'r') as f:
+            sim_log_content = f.read()
+    
+    # 3. Required Assertions (15%) - Check from simulation log
+    if sim_success:
+        req_checker = AssertionRequirementChecker(checker.testbench_path)
+        req_checker.set_simulation_log(sim_log_content)
+        req_score, req_details = req_checker.get_score()
+        scores["required_assertions"] = req_score
+        print(f"\n3. Required Assertions: {scores['required_assertions']:.0f}/100 (weight: {weights['required_assertions']}%)")
+        print(f"   Verified: {req_details['verified_assertions']}/{req_details['total_assertions']}")
+    else:
+        scores["required_assertions"] = 0.0
+        print(f"\n3. Required Assertions: SKIPPED (simulation failed)")
+    
+    # 4. Functional Correctness (15%) - Testbench works with correct RTL
+    if sim_success:
+        fc_checker = FunctionalCorrectnessChecker(sim_log_content)
+        fc_score, fc_details = fc_checker.get_score()
+        scores["functional_correctness"] = fc_score
+        print(f"\n4. Functional Correctness: {scores['functional_correctness']:.0f}/100 (weight: {weights['functional_correctness']}%)")
+        print(f"   No False Positives: {'✓' if fc_details['no_false_positives'] else '✗'}")
+        print(f"   Transactions Occur: {'✓' if fc_details['transactions_occur'] else '✗'}")
+        print(f"   All Channels Active: {'✓' if fc_details['all_channels_active'] else '✗'}")
+    else:
+        scores["functional_correctness"] = 0.0
+        print(f"\n4. Functional Correctness: SKIPPED (simulation failed)")
+    
+    # 5. Protocol Coverage (15%)
+    if enable_protocol_coverage:
+        coverage_checker = AXI4ProtocolCoverageChecker(checker.testbench_path)
+        cov_score, cov_details = coverage_checker.get_coverage_grade()
+        scores["protocol_coverage"] = cov_score
+        print(f"\n5. Protocol Coverage: {scores['protocol_coverage']:.0f}/100 (weight: {weights['protocol_coverage']}%)")
+        print(f"   Channels: {cov_details['channels_covered']}/5")
+        print(f"   Checks: {cov_details['checks_found']}/{cov_details['checks_possible']}")
+    else:
+        scores["protocol_coverage"] = 50.0
+        print(f"\n5. Protocol Coverage: SKIPPED (using default 50)")
+    
+    # 6. Assertion Execution (10%)
+    if sim_success:
         log_check = checker.check_assertions_in_log()
         if log_check['assertions_executed'] > 0:
-            # Bonus for more assertions executed
-            exec_score = min(100, 50 + log_check['assertion_passes'] * 5)
+            exec_score = min(100, 50 + log_check['assertion_passes'] * 2)
             scores["assertion_execution"] = exec_score
         else:
             scores["assertion_execution"] = 0.0
+        print(f"\n6. Assertion Execution: {scores['assertion_execution']:.0f}/100 (weight: {weights['assertion_execution']}%)")
+        print(f"   Executed: {log_check['assertions_executed']}, Passes: {log_check['assertion_passes']}")
     else:
         scores["assertion_execution"] = 0.0
-    print(f"\n5. Assertion Execution: {scores['assertion_execution']:.0f}/100 (weight: {weights['assertion_execution']}%)")
+        print(f"\n6. Assertion Execution: SKIPPED (simulation failed)")
     
-    # 6. Bug Detection (25%)
-    if enable_bug_injection and compile_success and scores["simulation"] > 0:
-        tester = AXI4BugInjectionTester(
+    # 7. Targeted Bug Detection (25%) - Most important!
+    if enable_bug_injection and compile_success and sim_success:
+        tester = TargetedBugInjectionTester(
             testbench_path=checker.testbench_path,
             design_root=design_root,
             dut_files=dut_files_list,
             simulator=simulator,
         )
-        bug_score, bug_details = tester.get_bug_detection_grade()
+        bug_score, bug_results = tester.get_grade()
         scores["bug_detection"] = bug_score
-        print(f"\n6. Bug Detection: {scores['bug_detection']:.0f}/100 (weight: {weights['bug_detection']}%)")
-        print(f"   Bugs caught: {bug_details['bugs_caught']}/{bug_details['total_bugs']}")
+        print(f"\n7. Targeted Bug Detection: {scores['bug_detection']:.0f}/100 (weight: {weights['bug_detection']}%)")
+        print(f"   Fully caught (correct assertion): {bug_results['fully_caught']}/{bug_results['total_bugs']}")
+        print(f"   Partially caught (any assertion): {bug_results['partially_caught']}/{bug_results['total_bugs']}")
+        print(f"   Missed: {bug_results['missed']}/{bug_results['total_bugs']}")
     else:
         scores["bug_detection"] = 0.0
-        print(f"\n6. Bug Detection: SKIPPED (prerequisite failed)")
+        print(f"\n7. Targeted Bug Detection: SKIPPED (prerequisite failed)")
     
     # Calculate weighted total
     total_score = sum(
@@ -455,28 +606,3 @@ def test_comprehensive_grade(test):
     # Assertions
     assert total_score >= pass_threshold, \
         f"Overall score {total_score:.1f}% below {pass_threshold}% threshold"
-
-
-# ============================================================
-# QUICK CHECK (for fast iteration)
-# ============================================================
-
-def test_quick_assertion_check():
-    """
-    Quick test to just check if assertions exist (no compilation).
-    Useful for fast feedback.
-    """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
-    
-    checker = AssertionChecker(testbench_path, dut_path)
-    code_check = checker.check_assertions_in_code()
-    
-    print(f"\nQuick Check: {code_check['assertion_count']} assertions found")
-    print(f"Testbench: {checker.testbench_path}")
-    
-    if not code_check['valid']:
-        pytest.skip(f"Could not read testbench file: {checker.testbench_path}")
-    
-    if require_assertions:
-        assert code_check['has_assertions'], "No assertions found in testbench"

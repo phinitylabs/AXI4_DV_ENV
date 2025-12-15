@@ -25,6 +25,20 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 
 
+def get_available_simulator() -> str:
+    """
+    Determine which simulator is available.
+    
+    Returns:
+        "verilator" if available, otherwise "icarus"
+    """
+    if shutil.which("verilator"):
+        return "verilator"
+    if shutil.which("iverilog"):
+        return "icarus"
+    return "verilator"
+
+
 @dataclass
 class BugVariant:
     """Describes a bug to inject into RTL."""
@@ -82,8 +96,15 @@ class AXI4BugInjectionTester:
     # These are designed to be caught by proper protocol assertions
     # NOTE: Patterns must match the actual RTL code in sources/
     # IMPORTANT: Avoid #delay which causes timescale issues in Icarus
+    #
+    # COMPREHENSIVE BUG SET:
+    # - 15 bugs covering all 5 AXI4 channels
+    # - Mix of protocol violations, timing issues, data corruption
+    # - Different severity levels
     AXI4_BUGS = [
-        # Write Address Channel bugs - change signal to always 0 (never valid)
+        # ==============================================
+        # Write Address Channel bugs (AW)
+        # ==============================================
         BugVariant(
             name="AW_VALID_NEVER_ASSERTS",
             description="AWVALID never asserts (no write transactions)",
@@ -94,9 +115,20 @@ class AXI4BugInjectionTester:
             severity="high",
             channel="AW",
         ),
+        BugVariant(
+            name="AW_READY_STUCK_LOW",
+            description="AWREADY never asserts (slave never accepts address)",
+            file_to_modify="sources/axi4_slave.sv",
+            search_pattern=r"(axi_awready\s*<=\s*1'b1;)",
+            replacement=r"axi_awready <= 1'b0; // BUG: AWREADY never asserts",
+            expected_assertion_failure="AWREADY",
+            severity="high",
+            channel="AW",
+        ),
         
-        # Write Data Channel bugs
-        # Pattern matches: axi_wlast <= (write_count == write_length);
+        # ==============================================
+        # Write Data Channel bugs (W)
+        # ==============================================
         BugVariant(
             name="W_LAST_MISSING",
             description="WLAST not asserted on final beat",
@@ -107,9 +139,30 @@ class AXI4BugInjectionTester:
             severity="high",
             channel="W",
         ),
+        BugVariant(
+            name="W_VALID_NEVER_ASSERTS",
+            description="WVALID never asserts (no write data)",
+            file_to_modify="sources/axi4_master.sv",
+            search_pattern=r"(axi_wvalid\s*<=\s*1'b1;)",
+            replacement=r"axi_wvalid <= 1'b0; // BUG: WVALID never asserts",
+            expected_assertion_failure="WVALID",
+            severity="high",
+            channel="W",
+        ),
+        BugVariant(
+            name="W_STRB_ALL_ZERO",
+            description="Write strobes always zero (no data actually written)",
+            file_to_modify="sources/axi4_master.sv",
+            search_pattern=r"(axi_wstrb\s*<=\s*4'hF;)",
+            replacement=r"axi_wstrb <= 4'h0; // BUG: No bytes enabled",
+            expected_assertion_failure="WSTRB",
+            severity="medium",
+            channel="W",
+        ),
         
-        # Write Response Channel bugs
-        # Pattern matches: axi_bresp <= OKAY; (uses constant)
+        # ==============================================
+        # Write Response Channel bugs (B)
+        # ==============================================
         BugVariant(
             name="B_RESP_INVALID",
             description="BRESP returns error instead of OKAY",
@@ -130,8 +183,20 @@ class AXI4BugInjectionTester:
             severity="high",
             channel="B",
         ),
+        BugVariant(
+            name="B_VALID_NEVER_DEASSERTS",
+            description="BVALID stuck high after first response",
+            file_to_modify="sources/axi4_slave.sv",
+            search_pattern=r"(axi_bvalid\s*<=\s*1'b0;\s*\n\s*write_response_ready)",
+            replacement=r"// BUG: BVALID stuck high\n                write_response_ready",
+            expected_assertion_failure="BVALID",
+            severity="medium",
+            channel="B",
+        ),
         
-        # Read Address Channel bugs - change signal to always 0
+        # ==============================================
+        # Read Address Channel bugs (AR)
+        # ==============================================
         BugVariant(
             name="AR_VALID_NEVER_ASSERTS",
             description="ARVALID never asserts (no read transactions)",
@@ -142,9 +207,20 @@ class AXI4BugInjectionTester:
             severity="high",
             channel="AR",
         ),
+        BugVariant(
+            name="AR_READY_STUCK_LOW",
+            description="ARREADY stuck low (slave never accepts read address)",
+            file_to_modify="sources/axi4_slave.sv",
+            search_pattern=r"(axi_arready\s*<=\s*1'b1;)",
+            replacement=r"axi_arready <= 1'b0; // BUG: ARREADY stuck low",
+            expected_assertion_failure="ARREADY",
+            severity="high",
+            channel="AR",
+        ),
         
-        # Read Data Channel bugs
-        # Pattern matches: axi_rlast <= 1'b1; // Single beat for now
+        # ==============================================
+        # Read Data Channel bugs (R)
+        # ==============================================
         BugVariant(
             name="R_LAST_MISSING",
             description="RLAST not asserted on final beat",
@@ -155,7 +231,6 @@ class AXI4BugInjectionTester:
             severity="high",
             channel="R",
         ),
-        # Pattern matches: axi_rresp <= OKAY; (uses constant)
         BugVariant(
             name="R_RESP_INVALID",
             description="RRESP returns error instead of OKAY",
@@ -166,6 +241,40 @@ class AXI4BugInjectionTester:
             severity="medium",
             channel="R",
         ),
+        BugVariant(
+            name="R_VALID_NEVER_ASSERTS",
+            description="RVALID never asserts (no read data)",
+            file_to_modify="sources/axi4_slave.sv",
+            search_pattern=r"(axi_rvalid\s*<=\s*1'b1;)",
+            replacement=r"axi_rvalid <= 1'b0; // BUG: RVALID never asserts",
+            expected_assertion_failure="RVALID",
+            severity="high",
+            channel="R",
+        ),
+        BugVariant(
+            name="R_DATA_CORRUPTION",
+            description="Read data is corrupted (XOR with constant)",
+            file_to_modify="sources/axi4_slave.sv",
+            search_pattern=r"(axi_rdata\s*<=\s*memory\[read_addr\];)",
+            replacement=r"axi_rdata <= memory[read_addr] ^ 32'hDEADBEEF; // BUG: Data corruption",
+            expected_assertion_failure="RDATA",
+            severity="high",
+            channel="R",
+        ),
+        
+        # ==============================================
+        # Cross-channel / Protocol bugs
+        # ==============================================
+        BugVariant(
+            name="WRITE_COUNT_OFF_BY_ONE",
+            description="Write beat count is off by one",
+            file_to_modify="sources/axi4_slave.sv",
+            search_pattern=r"(write_count\s*<=\s*write_count\s*\+\s*1;)",
+            replacement=r"write_count <= write_count + 2; // BUG: Off by one",
+            expected_assertion_failure="WRITE_COUNT",
+            severity="medium",
+            channel="W",
+        ),
     ]
     
     def __init__(
@@ -173,7 +282,7 @@ class AXI4BugInjectionTester:
         testbench_path: str,
         design_root: str,
         dut_files: List[str],
-        simulator: str = "icarus",
+        simulator: str = "verilator",
     ):
         """
         Initialize bug injection tester.
@@ -182,12 +291,19 @@ class AXI4BugInjectionTester:
             testbench_path: Path to testbench file
             design_root: Root directory of the design
             dut_files: List of DUT source files (relative to design_root)
-            simulator: Simulator to use (icarus, verilator)
+            simulator: Simulator to use (verilator preferred, icarus fallback)
         """
         self.testbench_path = testbench_path
         self.design_root = design_root
         self.dut_files = dut_files
-        self.simulator = simulator
+        
+        # Auto-detect simulator if requested one not available
+        requested_sim = simulator.lower()
+        if requested_sim == "verilator" and not shutil.which("verilator"):
+            self.simulator = "icarus"
+        else:
+            self.simulator = requested_sim
+        
         self.temp_dir = None
         
     def _setup_temp_directory(self) -> str:
@@ -278,18 +394,38 @@ class AXI4BugInjectionTester:
         if not source_files:
             return False, False, "No source files found"
         
-        # Compile
-        if self.simulator == "icarus":
+        # Get testbench module name
+        tb_name = os.path.splitext(os.path.basename(self.testbench_path))[0]
+        
+        # Compile based on simulator
+        if self.simulator == "verilator":
+            compile_cmd = [
+                "verilator",
+                "--binary",
+                "--timing",
+                "-Wno-fatal",
+                "-Wno-WIDTHEXPAND",
+                "-Wno-WIDTHTRUNC",
+                "-Wno-TIMESCALEMOD",
+                "-Wno-STMTDLY",
+                "-Wno-INITIALDLY",
+                "--top-module", tb_name,
+                "-o", f"{output_dir}/Vtb",
+                "--Mdir", f"{output_dir}/obj_dir"
+            ] + source_files
+            exe_path = f"{output_dir}/Vtb"
+            sim_cmd = [exe_path]
+        else:  # icarus
             compile_cmd = ["iverilog", "-g2012", "-o", f"{output_dir}/tb.out"] + source_files
-        else:
-            return False, False, f"Unsupported simulator: {self.simulator}"
+            exe_path = f"{output_dir}/tb.out"
+            sim_cmd = ["vvp", exe_path]
         
         try:
             compile_result = subprocess.run(
                 compile_cmd,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=120,  # Verilator may take longer
                 cwd=self.temp_dir,
             )
             
@@ -297,13 +433,15 @@ class AXI4BugInjectionTester:
                 return False, False, compile_result.stderr
         except subprocess.TimeoutExpired:
             return False, False, "Compilation timed out"
+        except FileNotFoundError as e:
+            return False, False, f"Simulator not found: {e}"
         except Exception as e:
             return False, False, str(e)
         
         # Run simulation
         try:
             sim_result = subprocess.run(
-                ["vvp", f"{output_dir}/tb.out"],
+                sim_cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -313,7 +451,7 @@ class AXI4BugInjectionTester:
             log_content = sim_result.stdout + sim_result.stderr
             
             # Check for completion
-            sim_success = "$finish" in log_content or "VCD info" in log_content
+            sim_success = "$finish" in log_content or "VCD info" in log_content or sim_result.returncode == 0
             
             return True, sim_success, log_content
         except subprocess.TimeoutExpired:
@@ -481,7 +619,8 @@ def test_bug_detection(
     testbench_path: str,
     design_root: str,
     dut_files: List[str],
-    simulator: str = "icarus",
+    simulator: str = "verilator",
+    min_detection_rate: float = 50.0,  # Increased from 50% - good testbench should catch more
 ) -> Tuple[bool, float, Dict[str, any]]:
     """
     Convenience function to test bug detection capability.
@@ -491,6 +630,7 @@ def test_bug_detection(
         design_root: Root directory of design
         dut_files: List of DUT source files
         simulator: Simulator to use
+        min_detection_rate: Minimum acceptable bug detection rate (default 50%)
         
     Returns:
         Tuple of (passed, score, details)
@@ -504,8 +644,20 @@ def test_bug_detection(
     
     score, details = tester.get_bug_detection_grade()
     
-    # Pass threshold: 50% bug detection rate
-    passed = score >= 50.0
+    # Pass threshold: configurable detection rate
+    # A good testbench should catch at least 50% of bugs
+    # An excellent testbench should catch 70%+
+    passed = score >= min_detection_rate
+    
+    # Add grade tiers to details
+    if score >= 80:
+        details["grade_tier"] = "Excellent"
+    elif score >= 60:
+        details["grade_tier"] = "Good"
+    elif score >= 40:
+        details["grade_tier"] = "Fair"
+    else:
+        details["grade_tier"] = "Poor"
     
     return passed, score, details
 

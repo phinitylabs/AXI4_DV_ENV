@@ -3,22 +3,44 @@ Testbench Assertion Checker for DV Task Grading.
 
 This module:
 1. Detects assertions in SystemVerilog testbenches
-2. Compiles and simulates testbenches
+2. Compiles and simulates testbenches (Verilator preferred, Icarus fallback)
 3. Analyzes simulation logs for assertion execution
 4. Grades testbenches based on assertion coverage
+
+Simulator Priority:
+1. Verilator (--timing) - Best SVA support
+2. Icarus Verilog - Fallback for basic SystemVerilog
 """
 
 import os
 import re
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+
+def get_available_simulator() -> str:
+    """
+    Determine which simulator is available.
+    
+    Returns:
+        "verilator" if available, otherwise "icarus"
+    """
+    # Check for Verilator first
+    if shutil.which("verilator"):
+        return "verilator"
+    # Fall back to Icarus
+    if shutil.which("iverilog"):
+        return "icarus"
+    # Default to verilator (will fail later with proper error)
+    return "verilator"
 
 
 class AssertionChecker:
     """Checks for assertions in testbenches and analyzes their execution."""
     
-    def __init__(self, testbench_path: str, dut_path: Optional[str] = None, simulator: str = "icarus"):
+    def __init__(self, testbench_path: str, dut_path: Optional[str] = None, simulator: str = "verilator"):
         """
         Initialize the assertion checker.
         
@@ -26,15 +48,23 @@ class AssertionChecker:
             testbench_path: Path to the testbench file
             dut_path: Optional path to DUT file (if testbench doesn't include it)
             simulator: Simulator to use ("icarus" or "verilator")
+                       If "verilator" is specified but not available, falls back to "icarus"
         """
         self.testbench_path = self._resolve_path(testbench_path)
         # Don't resolve dut_path here - it may contain multiple files separated by spaces
         # Resolution will happen in compile_testbench() when files are split
         self.dut_path = dut_path
-        self.simulator = simulator.lower()
-        # Use log directory for all logs - always use harness/patch/tests for grading
-        # This ensures all logs are in one place for grading, regardless of testbench location
-        # Testbench can be in verif/ but logs go to harness/patch/tests/log/
+        
+        # Auto-detect simulator if the requested one is not available
+        requested_sim = simulator.lower()
+        if requested_sim == "verilator" and not shutil.which("verilator"):
+            self.simulator = "icarus"
+            self._simulator_fallback = True
+        else:
+            self.simulator = requested_sim
+            self._simulator_fallback = False
+        # Use log directory for all logs
+        # Determine output directory based on testbench location
         if "harness/patch/tests" in self.testbench_path:
             self.log_dir = "harness/patch/tests/log"
             self.output_dir = "harness/patch/tests/sim_build"
@@ -42,9 +72,13 @@ class AssertionChecker:
             self.log_dir = "harness/test/log"
             self.output_dir = "harness/test/sim_build"
         else:
-            # Default: use harness/patch/tests for grading (even if testbench is in verif/)
-            self.log_dir = "harness/patch/tests/log"
-            self.output_dir = "harness/patch/tests/sim_build"
+            # Default: use tests/ directory for standalone runs
+            self.log_dir = "tests/log"
+            self.output_dir = "tests/sim_build"
+        
+        # Create directories if they don't exist
+        os.makedirs(self.log_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
         self.sim_log_path = os.path.join(self.log_dir, "sim.log")
         self.compile_log_path = os.path.join(self.log_dir, "compile.log")
         
@@ -226,7 +260,10 @@ class AssertionChecker:
     
     def _compile_icarus(self, source_files: List[str]) -> Tuple[bool, str]:
         """Compile with Icarus Verilog."""
-        cmd = ["iverilog", "-g2012", "-o", f"{self.output_dir}/tb.out"] + source_files
+        abs_output_dir = os.path.abspath(self.output_dir)
+        os.makedirs(abs_output_dir, exist_ok=True)
+        exe_path = os.path.join(abs_output_dir, "tb.out")
+        cmd = ["iverilog", "-g2012", "-o", exe_path] + source_files
         
         try:
             result = subprocess.run(
@@ -253,16 +290,29 @@ class AssertionChecker:
         # Get the testbench module name (assume it's the filename without extension)
         tb_name = os.path.splitext(os.path.basename(self.testbench_path))[0]
         
+        # Use absolute paths for output directories
+        abs_output_dir = os.path.abspath(self.output_dir)
+        obj_dir = os.path.join(abs_output_dir, "verilator_obj")
+        exe_path = os.path.join(abs_output_dir, "Vtb")
+        
+        # Ensure directories exist
+        os.makedirs(abs_output_dir, exist_ok=True)
+        os.makedirs(obj_dir, exist_ok=True)
+        
         cmd = [
             "verilator",
             "--binary",
-            "--timing",
+            "--timing",  # Enable timing for delays (#100, etc.)
             "-Wno-fatal",
             "-Wno-WIDTHEXPAND",
-            "-Wno-WIDTHTRUNC", 
+            "-Wno-WIDTHTRUNC",
+            "-Wno-TIMESCALEMOD",  # Ignore timescale warnings
+            "-Wno-STMTDLY",  # Ignore statement delay warnings
+            "-Wno-INITIALDLY",  # Ignore initial block delay warnings
+            "--trace",  # Enable VCD trace generation
             "--top-module", tb_name,
-            "-o", f"{self.output_dir}/Vtb",
-            "--Mdir", f"{self.output_dir}/verilator_obj"
+            "-o", exe_path,
+            "--Mdir", obj_dir
         ] + source_files
         
         try:
@@ -296,10 +346,12 @@ class AssertionChecker:
         Returns:
             (success, error_message)
         """
+        abs_output_dir = os.path.abspath(self.output_dir)
+        
         if self.simulator == "verilator":
-            exe_path = f"{self.output_dir}/Vtb"
+            exe_path = os.path.join(abs_output_dir, "Vtb")
         else:
-            exe_path = f"{self.output_dir}/tb.out"
+            exe_path = os.path.join(abs_output_dir, "tb.out")
             
         if not os.path.exists(exe_path):
             return False, f"Compiled testbench not found at {exe_path}. Compile first."
@@ -488,7 +540,7 @@ def grade_generated_testbench(
     testbench_path: str,
     dut_path: Optional[str] = None,
     require_assertions: bool = True,
-    simulator: str = "icarus"
+    simulator: str = "verilator"
 ) -> Tuple[bool, Dict[str, any], str]:
     """
     Grade a generated testbench.
