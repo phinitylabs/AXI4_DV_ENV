@@ -68,11 +68,8 @@ from checkers.verilator_coverage_checker import (
 
 # Fetch environment variables
 # Testbench path - agent creates verif/axi4_top_tb.sv
-# For grading, we check both possible names (agent-created and golden reference)
-_default_tb = "verif/axi4_top_tb.sv"
-if not os.path.exists(_default_tb):
-    _default_tb = "verif/axi4_top_tb_golden.sv"  # Fallback to golden for testing
-testbench_path = os.getenv("TESTBENCH_PATH", _default_tb)
+# NO FALLBACK: Agent must create this exact file
+testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_top_tb.sv")
 dut_path = os.getenv("DUT_PATH", "sources/axi4_top.sv sources/axi4_master.sv sources/axi4_slave.sv sources/axi4_interrupt.sv")
 simulator = os.getenv("SIM", "verilator")
 require_assertions = os.getenv("REQUIRE_ASSERTIONS", "true").lower() == "true"
