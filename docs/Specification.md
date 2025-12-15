@@ -55,20 +55,43 @@ The design includes four SystemVerilog modules:
 
 Create a SystemVerilog testbench (`verif/axi4_top_tb.sv`) that:
 
-1. Instantiates the `axi4_top` module from `sources/axi4_top.sv`
-2. Contains SystemVerilog assertions to verify:
+1. **Instantiate the DUT**:
+   - Instantiate `axi4_top` from `sources/axi4_top.sv` (NOT axi4_slave directly!)
+   - The axi4_top module internally connects axi4_master, axi4_slave, and axi4_interrupt
+   - Your testbench monitors the internal AXI signals between master and slave
+   - Provide clock and reset signals
+
+2. **Add Protocol Assertions** to verify:
    - VALID signal stability (AWVALID, WVALID, ARVALID, BVALID, RVALID must remain stable until corresponding READY)
    - LAST signal correctness (WLAST, RLAST on final beats)
-   - Response code validation (BRESP, RRESP must be valid)
+   - Response code validation (BRESP, RRESP must be valid: 00=OKAY, 01=EXOKAY, 10=SLVERR, 11=DECERR)
    - Timing relationships (BVALID after WLAST, RVALID after ARREADY)
-3. Provides test stimulus including:
+
+3. **Provide Test Stimulus** including:
    - Single-beat write transactions
    - Multi-beat burst writes (INCR, FIXED, WRAP)
    - Read transactions with various burst lengths
    - Different address ranges
-4. Compiles successfully with Verilator (--timing flag)
-5. Simulates successfully and executes assertions during simulation
-6. Uses `$display("ASSERTION PASSED: ...")` and `$display("ASSERTION FAILED: ...")` for assertion reporting
+
+4. **Testbench Quality**:
+   - Must compile AND simulate successfully with Verilator
+   - Use `$display("ASSERTION PASSED: ...")` and `$display("ASSERTION FAILED: ...")` for assertion reporting
+
+## Verification Command
+
+**IMPORTANT**: Your testbench MUST pass this verification before submission:
+
+```bash
+# Compile for simulation (NOT just lint-only!)
+verilator --binary --timing -Wno-fatal \
+    sources/axi4_top.sv sources/axi4_master.sv sources/axi4_slave.sv sources/axi4_interrupt.sv \
+    verif/axi4_top_tb.sv --top-module axi4_top_tb -o sim_tb
+
+# Run simulation
+./sim_tb
+```
+
+**NOTE**: `verilator --lint-only` is NOT sufficient! You MUST test with `--binary` and run the actual simulation.
 
 ## Key Signals
 

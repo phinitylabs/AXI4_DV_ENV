@@ -8,22 +8,25 @@ This comprehensive test runner uses Verilator as the default simulator for:
 - Better SystemVerilog support
 - Stricter syntax checking
 - Proper SVA (SystemVerilog Assertions) evaluation
-- Built-in coverage capabilities
+- Built-in coverage capabilities (line, toggle, branch)
 
 Test Workflow:
-1. Compiles and simulates testbench
+1. Compiles and simulates testbench with Verilator --binary
 2. Verifies REQUIRED assertions execute (from prompt) by checking logs
 3. Checks protocol coverage (AXI4 channels)
-4. Tests bug detection capability (functional correctness)
-5. Calculates weighted final score
+4. Analyzes code coverage using Verilator's coverage instrumentation
+5. Tests bug detection capability (functional correctness)
+6. Calculates weighted final score
 
-Grading Breakdown:
-- Required Assertions (from prompt): 20%
-- Protocol Coverage: 20%
-- Compilation: 10%
-- Simulation: 10%
-- Assertion Execution: 15%
-- Bug Detection (Functional): 25%
+Grading Breakdown (8 categories, 100% total):
+- Compilation: 5%
+- Simulation: 5%
+- Required Assertions (from prompt): 15%
+- Functional Correctness: 10%
+- Protocol Coverage: 10%
+- Assertion Execution: 10%
+- Code Coverage (Verilator): 15%  <-- NEW
+- Bug Detection (Functional): 30%
 
 Simulator: Verilator (default) or Icarus (fallback)
 """
@@ -56,6 +59,11 @@ from checkers.targeted_bug_injection import (
 from checkers.functional_correctness_checker import (
     FunctionalCorrectnessChecker,
     format_functional_correctness_report,
+)
+from checkers.verilator_coverage_checker import (
+    VerilatorCoverageChecker,
+    analyze_verilator_coverage,
+    format_coverage_report as format_verilator_coverage_report,
 )
 
 # Fetch environment variables
@@ -459,6 +467,68 @@ def test_bug_detection(test):
 
 
 # ============================================================
+# CODE COVERAGE TEST (Verilator-based coverage analysis)
+# ============================================================
+
+@pytest.mark.parametrize("test", range(1))
+def test_code_coverage(test):
+    """
+    Test that the testbench achieves adequate code coverage on the DUT.
+    Weight: 15%
+    
+    Uses Verilator's built-in coverage instrumentation to measure:
+    - Line coverage: Which lines of DUT code are executed
+    - Toggle coverage: Which signals are toggled during simulation
+    - Branch coverage: Which branches are taken in conditional statements
+    
+    This ensures the testbench actually exercises the DUT thoroughly,
+    not just checking a few trivial cases.
+    """
+    _require_testbench()
+    
+    checker = _get_checker()
+    
+    # First verify testbench compiles and simulates
+    compile_success, compile_error = checker.compile_testbench()
+    if not compile_success:
+        pytest.skip(f"Testbench must compile first: {compile_error}")
+    
+    sim_success, _ = checker.run_simulation()
+    if not sim_success:
+        pytest.skip("Testbench must simulate first")
+    
+    print(f"\n=== Code Coverage Analysis (Verilator) ===")
+    print(f"Testbench: {checker.testbench_path}")
+    print(f"Analyzing coverage on DUT files...")
+    
+    # Run coverage analysis
+    cov_checker = VerilatorCoverageChecker(
+        testbench_path=checker.testbench_path,
+        dut_files=dut_files_list,
+        design_root=design_root,
+    )
+    
+    score, details = cov_checker.get_coverage_grade()
+    
+    # Print report
+    print(format_verilator_coverage_report(details))
+    
+    print(f"Coverage Score: {score:.1f}%")
+    print(f"  Line Coverage: {details['line_coverage']:.1f}%")
+    print(f"  Toggle Coverage: {details['toggle_coverage']:.1f}%")
+    print(f"  Branch Coverage: {details['branch_coverage']:.1f}%")
+    
+    # Assertions - require minimum coverage
+    # Note: These are lenient thresholds since not all code can be covered
+    assert score >= 20.0, \
+        f"Code coverage score {score:.1f}% below 20% minimum"
+    
+    # At least some line coverage is required
+    assert details['line_coverage'] >= 10.0, \
+        f"Line coverage {details['line_coverage']:.1f}% too low - testbench must exercise DUT"
+
+
+# ============================================================
 # COMPREHENSIVE GRADING TEST
 # ============================================================
 
@@ -467,13 +537,15 @@ def test_comprehensive_grade(test):
     """
     Comprehensive test that grades the entire testbench with weighted scoring.
     
-    Score Breakdown:
-    - Required Assertions: 20%
-    - Protocol Coverage: 20%
-    - Compilation: 10%
-    - Simulation: 10%
-    - Assertion Execution: 15%
-    - Bug Detection: 25%
+    Score Breakdown (8 categories, 100% total):
+    - Compilation: 5%
+    - Simulation: 5%
+    - Required Assertions: 15%
+    - Functional Correctness: 10%
+    - Protocol Coverage: 10%
+    - Assertion Execution: 10%
+    - Code Coverage: 15%  (NEW: Verilator-based coverage)
+    - Bug Detection: 30%
     
     Pass threshold: 60% overall
     """
@@ -483,13 +555,14 @@ def test_comprehensive_grade(test):
     
     scores = {}
     weights = {
-        "compilation": 10,
-        "simulation": 10,
+        "compilation": 5,
+        "simulation": 5,
         "required_assertions": 15,
-        "functional_correctness": 15,
-        "protocol_coverage": 15,
+        "functional_correctness": 10,
+        "protocol_coverage": 10,
         "assertion_execution": 10,
-        "bug_detection": 25,
+        "code_coverage": 15,  # NEW: Verilator coverage
+        "bug_detection": 30,
     }
     
     print("\n" + "=" * 60)
@@ -567,7 +640,26 @@ def test_comprehensive_grade(test):
         scores["assertion_execution"] = 0.0
         print(f"\n6. Assertion Execution: SKIPPED (simulation failed)")
     
-    # 7. Targeted Bug Detection (25%) - Most important!
+    # 7. Code Coverage (15%) - Verilator-based DUT coverage
+    if compile_success and sim_success:
+        try:
+            cov_checker = VerilatorCoverageChecker(
+                testbench_path=checker.testbench_path,
+                dut_files=dut_files_list,
+                design_root=design_root,
+            )
+            cov_score, cov_details = cov_checker.get_coverage_grade()
+            scores["code_coverage"] = cov_score
+            print(f"\n7. Code Coverage: {scores['code_coverage']:.0f}/100 (weight: {weights['code_coverage']}%)")
+            print(f"   Line: {cov_details['line_coverage']:.1f}%, Toggle: {cov_details['toggle_coverage']:.1f}%, Branch: {cov_details['branch_coverage']:.1f}%")
+        except Exception as e:
+            scores["code_coverage"] = 0.0
+            print(f"\n7. Code Coverage: ERROR ({str(e)[:50]})")
+    else:
+        scores["code_coverage"] = 0.0
+        print(f"\n7. Code Coverage: SKIPPED (simulation failed)")
+    
+    # 8. Targeted Bug Detection (30%) - Most important!
     if enable_bug_injection and compile_success and sim_success:
         tester = TargetedBugInjectionTester(
             testbench_path=checker.testbench_path,
@@ -577,13 +669,13 @@ def test_comprehensive_grade(test):
         )
         bug_score, bug_results = tester.get_grade()
         scores["bug_detection"] = bug_score
-        print(f"\n7. Targeted Bug Detection: {scores['bug_detection']:.0f}/100 (weight: {weights['bug_detection']}%)")
+        print(f"\n8. Targeted Bug Detection: {scores['bug_detection']:.0f}/100 (weight: {weights['bug_detection']}%)")
         print(f"   Fully caught (correct assertion): {bug_results['fully_caught']}/{bug_results['total_bugs']}")
         print(f"   Partially caught (any assertion): {bug_results['partially_caught']}/{bug_results['total_bugs']}")
         print(f"   Missed: {bug_results['missed']}/{bug_results['total_bugs']}")
     else:
         scores["bug_detection"] = 0.0
-        print(f"\n7. Targeted Bug Detection: SKIPPED (prerequisite failed)")
+        print(f"\n8. Targeted Bug Detection: SKIPPED (prerequisite failed)")
     
     # Calculate weighted total
     total_score = sum(

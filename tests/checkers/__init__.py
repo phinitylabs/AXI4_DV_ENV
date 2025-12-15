@@ -11,7 +11,11 @@ Contains checkers for:
 from .testbench_assertion_checker import AssertionChecker, grade_generated_testbench
 from .protocol_coverage_checker import AXI4ProtocolCoverageChecker, check_protocol_coverage
 from .bug_injection_tester import AXI4BugInjectionTester, test_bug_detection
-from .verilator_coverage_checker import VerilatorCoverageChecker
+from .verilator_coverage_checker import (
+    VerilatorCoverageChecker,
+    analyze_verilator_coverage,
+    format_coverage_report as format_verilator_coverage_report,
+)
 from .assertion_requirement_checker import (
     AssertionRequirementChecker,
     check_required_assertions,
@@ -41,6 +45,8 @@ __all__ = [
     "test_bug_detection",
     # Verilator Coverage
     "VerilatorCoverageChecker",
+    "analyze_verilator_coverage",
+    "format_verilator_coverage_report",
     # Assertion Requirements
     "AssertionRequirementChecker",
     "check_required_assertions",
