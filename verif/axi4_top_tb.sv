@@ -5,7 +5,7 @@
 
 `timescale 1ns/1ps
 
-module axi4_top_tb_golden;
+module axi4_top_tb;
 
     // Clock and Reset
     logic clk;
