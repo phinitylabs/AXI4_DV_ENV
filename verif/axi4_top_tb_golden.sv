@@ -86,14 +86,29 @@ module axi4_top_tb_golden;
     
     // Track assertion states for protocol checks
     logic awvalid_asserted = 1'b0;
+    logic wvalid_asserted = 1'b0;   // Added for WVALID stability
     logic bvalid_asserted = 1'b0;
     logic arvalid_asserted = 1'b0;
+    logic rvalid_asserted = 1'b0;   // Added for RVALID stability
     logic wlast_seen = 1'b0;
     logic rlast_seen = 1'b0;
     logic interrupt_req_asserted = 1'b0;
     int write_data_complete_cycles = 0;
     int read_addr_cycles = 0;
     int interrupt_req_cycles = 0;
+    int write_beat_count = 0;       // Track write beats for WLAST check
+    int read_beat_count = 0;        // Track read beats for RLAST check
+    
+    // Timeout tracking for "signal never asserts" detection
+    logic aw_handshake_done = 1'b0;  // AW phase complete, expect W
+    int aw_to_w_timeout = 0;         // Cycles waiting for WVALID after AW
+    logic ar_handshake_done = 1'b0;  // AR phase complete, expect R
+    int ar_to_r_timeout = 0;         // Cycles waiting for RVALID after AR
+    logic w_handshake_done = 1'b0;   // W phase complete, expect B
+    int w_to_b_timeout = 0;          // Cycles waiting for BVALID after W
+    
+    // Constants for timeout values
+    localparam int VALID_TIMEOUT = 50;  // Max cycles to wait for VALID signal
     
     // Assertion 1: Write Address Channel Handshake
     // AWVALID must remain asserted until AWREADY is asserted
@@ -109,7 +124,7 @@ module axi4_top_tb_golden;
             end
             if (awvalid_asserted && !dut.axi_awvalid && !dut.axi_awready) begin
                 assertion_fail_count++;
-                $error("ASSERTION FAILED: AWVALID not stable until AWREADY");
+                $display("ASSERTION FAILED: AWVALID not stable until AWREADY");
                 awvalid_asserted <= 1'b0;
             end
         end else begin
@@ -117,25 +132,86 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 2: Write Data Channel - WLAST must be asserted on last beat
+    // Assertion 2: Write Data Channel - WVALID must remain stable until WREADY
     always @(posedge clk) begin
         if (resetn) begin
-            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
-                wlast_seen <= 1'b1;
-                assertion_pass_count++;
-                $display("ASSERTION PASSED: WLAST correctly asserted");
-            end else if (dut.axi_wvalid && dut.axi_wready && !dut.axi_wlast) begin
-                wlast_seen <= 1'b0;
+            if (dut.axi_wvalid && !wvalid_asserted) begin
+                wvalid_asserted <= 1'b1;
             end
-            if (wlast_seen && dut.axi_wvalid && !dut.axi_wlast) begin
+            if (dut.axi_wvalid && dut.axi_wready) begin
+                wvalid_asserted <= 1'b0;
+                assertion_pass_count++;
+                $display("ASSERTION PASSED: WVALID stable until WREADY");
+            end
+            if (wvalid_asserted && !dut.axi_wvalid && !dut.axi_wready) begin
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: WVALID not stable until WREADY");
+                wvalid_asserted <= 1'b0;
+            end
+        end else begin
+            wvalid_asserted <= 1'b0;
+        end
+    end
+    
+    // Assertion 2b: WVALID timeout - must assert within timeout after AW handshake
+    always @(posedge clk) begin
+        if (resetn) begin
+            // Track AW handshake completion
+            if (dut.axi_awvalid && dut.axi_awready) begin
+                aw_handshake_done <= 1'b1;
+                aw_to_w_timeout <= 0;
+            end
+            // Count cycles waiting for WVALID
+            if (aw_handshake_done && !dut.axi_wvalid) begin
+                aw_to_w_timeout <= aw_to_w_timeout + 1;
+                if (aw_to_w_timeout >= VALID_TIMEOUT) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: WVALID not stable until WREADY");
+                    aw_handshake_done <= 1'b0;
+                    aw_to_w_timeout <= 0;
+                end
+            end
+            // Reset when W handshake completes
+            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
+                aw_handshake_done <= 1'b0;
+                aw_to_w_timeout <= 0;
+            end
+        end else begin
+            aw_handshake_done <= 1'b0;
+            aw_to_w_timeout <= 0;
+        end
+    end
+    
+    // Assertion 3: Write Data Channel - WLAST must be asserted on last beat
+    always @(posedge clk) begin
+        if (resetn) begin
+            if (dut.axi_wvalid && dut.axi_wready) begin
+                write_beat_count <= write_beat_count + 1;
+                if (dut.axi_wlast) begin
+                    wlast_seen <= 1'b1;
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: WLAST correctly asserted");
+                    write_beat_count <= 0;
+                end
+            end
+            // Check if WLAST should have been asserted: BVALID without seeing WLAST
+            if (dut.axi_bvalid && !wlast_seen && write_beat_count > 0) begin
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: WLAST not asserted on final beat");
+                wlast_seen <= 1'b0;
+                write_beat_count <= 0;
+            end
+            // Reset seen flag after response
+            if (dut.axi_bvalid && dut.axi_bready) begin
                 wlast_seen <= 1'b0;
             end
         end else begin
             wlast_seen <= 1'b0;
+            write_beat_count <= 0;
         end
     end
     
-    // Assertion 3: Write Response Channel - BVALID must remain asserted until BREADY
+    // Assertion 4: Write Response Channel - BVALID must remain asserted until BREADY
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.axi_bvalid && !bvalid_asserted) begin
@@ -148,7 +224,7 @@ module axi4_top_tb_golden;
             end
             if (bvalid_asserted && !dut.axi_bvalid && !dut.axi_bready) begin
                 assertion_fail_count++;
-                $error("ASSERTION FAILED: BVALID not stable until BREADY");
+                $display("ASSERTION FAILED: BVALID not stable until BREADY");
                 bvalid_asserted <= 1'b0;
             end
         end else begin
@@ -156,7 +232,36 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 4: Read Address Channel Handshake
+    // Assertion 4b: BVALID timeout - must assert within timeout after W handshake completes
+    always @(posedge clk) begin
+        if (resetn) begin
+            // Track W handshake completion (WLAST)
+            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
+                w_handshake_done <= 1'b1;
+                w_to_b_timeout <= 0;
+            end
+            // Count cycles waiting for BVALID
+            if (w_handshake_done && !dut.axi_bvalid) begin
+                w_to_b_timeout <= w_to_b_timeout + 1;
+                if (w_to_b_timeout >= VALID_TIMEOUT) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: BVALID not stable until BREADY");
+                    w_handshake_done <= 1'b0;
+                    w_to_b_timeout <= 0;
+                end
+            end
+            // Reset when B handshake completes
+            if (dut.axi_bvalid && dut.axi_bready) begin
+                w_handshake_done <= 1'b0;
+                w_to_b_timeout <= 0;
+            end
+        end else begin
+            w_handshake_done <= 1'b0;
+            w_to_b_timeout <= 0;
+        end
+    end
+    
+    // Assertion 5: Read Address Channel - ARVALID must remain stable until ARREADY
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.axi_arvalid && !arvalid_asserted) begin
@@ -169,7 +274,7 @@ module axi4_top_tb_golden;
             end
             if (arvalid_asserted && !dut.axi_arvalid && !dut.axi_arready) begin
                 assertion_fail_count++;
-                $error("ASSERTION FAILED: ARVALID not stable until ARREADY");
+                $display("ASSERTION FAILED: ARVALID not stable until ARREADY");
                 arvalid_asserted <= 1'b0;
             end
         end else begin
@@ -177,7 +282,57 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 5: Write Response must come after write data completes
+    // Assertion 6: Read Data Channel - RVALID must remain stable until RREADY
+    always @(posedge clk) begin
+        if (resetn) begin
+            if (dut.axi_rvalid && !rvalid_asserted) begin
+                rvalid_asserted <= 1'b1;
+            end
+            if (dut.axi_rvalid && dut.axi_rready) begin
+                rvalid_asserted <= 1'b0;
+                assertion_pass_count++;
+                $display("ASSERTION PASSED: RVALID stable until RREADY");
+            end
+            if (rvalid_asserted && !dut.axi_rvalid && !dut.axi_rready) begin
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: RVALID not stable until RREADY");
+                rvalid_asserted <= 1'b0;
+            end
+        end else begin
+            rvalid_asserted <= 1'b0;
+        end
+    end
+    
+    // Assertion 6b: RVALID timeout - must assert within timeout after AR handshake
+    always @(posedge clk) begin
+        if (resetn) begin
+            // Track AR handshake completion
+            if (dut.axi_arvalid && dut.axi_arready) begin
+                ar_handshake_done <= 1'b1;
+                ar_to_r_timeout <= 0;
+            end
+            // Count cycles waiting for RVALID
+            if (ar_handshake_done && !dut.axi_rvalid) begin
+                ar_to_r_timeout <= ar_to_r_timeout + 1;
+                if (ar_to_r_timeout >= VALID_TIMEOUT) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: RVALID not stable until RREADY");
+                    ar_handshake_done <= 1'b0;
+                    ar_to_r_timeout <= 0;
+                end
+            end
+            // Reset when R handshake completes with RLAST
+            if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) begin
+                ar_handshake_done <= 1'b0;
+                ar_to_r_timeout <= 0;
+            end
+        end else begin
+            ar_handshake_done <= 1'b0;
+            ar_to_r_timeout <= 0;
+        end
+    end
+    
+    // Assertion 7: Write Response must come after write data completes
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
@@ -190,7 +345,7 @@ module axi4_top_tb_golden;
                     write_data_complete_cycles <= 0;
                 end else if (write_data_complete_cycles > 20) begin
                     assertion_fail_count++;
-                    $error("ASSERTION FAILED: Write response not received after data");
+                    $display("ASSERTION FAILED: Write response not received after data");
                     write_data_complete_cycles <= 0;
                 end
             end
@@ -199,7 +354,7 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 6: Read data must come after read address
+    // Assertion 8: Read data must come after read address
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.axi_arvalid && dut.axi_arready) begin
@@ -212,7 +367,7 @@ module axi4_top_tb_golden;
                     read_addr_cycles <= 0;
                 end else if (read_addr_cycles > 20) begin
                     assertion_fail_count++;
-                    $error("ASSERTION FAILED: Read data not received after address");
+                    $display("ASSERTION FAILED: Read data not received after address");
                     read_addr_cycles <= 0;
                 end
             end
@@ -221,13 +376,13 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 7: Response codes are valid for write
+    // Assertion 9: Response codes are valid for write
     always @(posedge clk) begin
         if (resetn && dut.axi_bvalid) begin
             assert (dut.axi_bresp == 2'b00 || dut.axi_bresp == 2'b01 || 
                     dut.axi_bresp == 2'b10 || dut.axi_bresp == 2'b11) else begin
                 assertion_fail_count++;
-                $error("ASSERTION FAILED: Invalid BRESP code");
+                $display("ASSERTION FAILED: Invalid BRESP code");
             end
             if (dut.axi_bresp == 2'b00 || dut.axi_bresp == 2'b01 || 
                 dut.axi_bresp == 2'b10 || dut.axi_bresp == 2'b11) begin
@@ -237,13 +392,13 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 8: Response codes are valid for read
+    // Assertion 10: Response codes are valid for read
     always @(posedge clk) begin
         if (resetn && dut.axi_rvalid) begin
             assert (dut.axi_rresp == 2'b00 || dut.axi_rresp == 2'b01 || 
                     dut.axi_rresp == 2'b10 || dut.axi_rresp == 2'b11) else begin
                 assertion_fail_count++;
-                $error("ASSERTION FAILED: Invalid RRESP code");
+                $display("ASSERTION FAILED: Invalid RRESP code");
             end
             if (dut.axi_rresp == 2'b00 || dut.axi_rresp == 2'b01 || 
                 dut.axi_rresp == 2'b10 || dut.axi_rresp == 2'b11) begin
@@ -253,25 +408,31 @@ module axi4_top_tb_golden;
         end
     end
     
-    // Assertion 9: RLAST must be asserted with last read data
+    // Assertion 11: RLAST must be asserted with last read data
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.axi_rvalid && dut.axi_rlast && dut.axi_rready) begin
                 rlast_seen <= 1'b1;
+                read_beat_count <= 0;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: RLAST correctly asserted");
             end else if (dut.axi_rvalid && dut.axi_rready && !dut.axi_rlast) begin
+                read_beat_count <= read_beat_count + 1;
                 rlast_seen <= 1'b0;
             end
-            if (rlast_seen && dut.axi_rvalid && !dut.axi_rlast) begin
-                rlast_seen <= 1'b0;
+            // Check if RLAST was expected but transaction ended without it
+            if (!dut.axi_rvalid && read_beat_count > 0 && !rlast_seen) begin
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: RLAST not asserted on final beat");
+                read_beat_count <= 0;
             end
         end else begin
             rlast_seen <= 1'b0;
+            read_beat_count <= 0;
         end
     end
     
-    // Assertion 10: Interrupt controller - ack should follow req
+    // Assertion 12: Interrupt controller - ack should follow req
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.interrupt_req && !interrupt_req_asserted) begin
@@ -286,7 +447,7 @@ module axi4_top_tb_golden;
                     interrupt_req_cycles <= 0;
                 end else if (interrupt_req_cycles > 10) begin
                     assertion_fail_count++;
-                    $error("ASSERTION FAILED: Interrupt ack does not follow req");
+                    $display("ASSERTION FAILED: Interrupt ack does not follow req");
                     interrupt_req_asserted <= 1'b0;
                     interrupt_req_cycles <= 0;
                 end
@@ -307,7 +468,7 @@ module axi4_top_tb_golden;
             // Check that valid/ready handshakes are proper
             assert ((dut.axi_awvalid && dut.axi_awready) || (!dut.axi_awvalid)) else begin
                 assertion_fail_count++;
-                $error("ASSERTION FAILED: Invalid AW handshake state");
+                $display("ASSERTION FAILED: Invalid AW handshake state");
             end
         end
     end
