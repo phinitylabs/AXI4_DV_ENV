@@ -90,6 +90,19 @@ def _testbench_exists():
     return os.path.exists(checker.testbench_path)
 
 
+def _require_testbench():
+    """
+    Fail the test if testbench doesn't exist.
+    
+    IMPORTANT: We use pytest.fail() instead of pytest.skip() because:
+    - A missing testbench is a FAILURE (agent didn't create submission)
+    - pytest.skip() would be treated as "pass" by the validation framework
+    - This ensures validation correctly identifies missing submissions
+    """
+    if not _testbench_exists():
+        pytest.fail(f"Testbench file not found: {testbench_path} - agent must create this file")
+
+
 def _get_checker():
     """Get a configured AssertionChecker instance."""
     checker = AssertionChecker(testbench_path, dut_path)
@@ -119,8 +132,7 @@ def test_required_assertions_present(test):
     - Response code validation (BRESP, RRESP)
     - Timing relationships (write response after data, read data after address)
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     checker = _get_checker()
     
@@ -182,8 +194,7 @@ def test_protocol_coverage(test):
     - All 5 AXI4 channels monitored (AW, W, B, AR, R)
     - Required protocol checks present (handshakes, VALID stability, etc.)
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     if not enable_protocol_coverage:
         pytest.skip("Protocol coverage checking disabled")
@@ -222,8 +233,7 @@ def test_testbench_compiles(test):
     Test that generated testbench compiles successfully.
     Weight: 10%
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     checker = _get_checker()
     
@@ -250,8 +260,7 @@ def test_testbench_simulates(test):
     Test that generated testbench simulates successfully.
     Weight: 10%
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     checker = _get_checker()
     
@@ -280,8 +289,7 @@ def test_assertions_execute(test):
     Test that assertions in testbench are executed during simulation.
     Weight: 15%
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     checker = _get_checker()
     
@@ -329,8 +337,7 @@ def test_functional_correctness(test):
     
     A testbench that fails on correct RTL is buggy!
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     checker = _get_checker()
     
@@ -400,8 +407,7 @@ def test_bug_detection(test):
     - We inject bug: AWVALID becomes unstable
     - Expected: Assertion about AWVALID stability should fail
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     if not enable_bug_injection:
         pytest.skip("Bug injection testing disabled")
@@ -471,8 +477,7 @@ def test_comprehensive_grade(test):
     
     Pass threshold: 60% overall
     """
-    if not _testbench_exists():
-        pytest.skip(f"Testbench file not found: {testbench_path}")
+    _require_testbench()
     
     checker = _get_checker()
     
