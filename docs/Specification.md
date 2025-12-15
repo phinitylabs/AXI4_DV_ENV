@@ -53,19 +53,22 @@ The design includes four SystemVerilog modules:
 
 ## Task Requirements
 
-Create a SystemVerilog testbench (`verif/axi4_slave_tb.sv`) that:
+Create a SystemVerilog testbench (`verif/axi4_top_tb.sv`) that:
 
-1. Instantiates the `axi4_slave` module from `sources/axi4_slave.sv`
-2. Contains SystemVerilog immediate assertions to verify:
-   - Address calculation correctness based on AWADDR, AWLEN, AWSIZE, and AWBURST
-   - Write count matches AWLEN+1
-   - Response codes (OKAY for successful writes, SLVERR for out-of-range addresses)
+1. Instantiates the `axi4_top` module from `sources/axi4_top.sv`
+2. Contains SystemVerilog assertions to verify:
+   - VALID signal stability (AWVALID, WVALID, ARVALID, BVALID, RVALID must remain stable until corresponding READY)
+   - LAST signal correctness (WLAST, RLAST on final beats)
+   - Response code validation (BRESP, RRESP must be valid)
+   - Timing relationships (BVALID after WLAST, RVALID after ARREADY)
 3. Provides test stimulus including:
    - Single-beat write transactions
    - Multi-beat burst writes (INCR, FIXED, WRAP)
-   - Different address ranges (in-range and out-of-range)
-4. Compiles successfully with Icarus Verilog
+   - Read transactions with various burst lengths
+   - Different address ranges
+4. Compiles successfully with Verilator (--timing flag)
 5. Simulates successfully and executes assertions during simulation
+6. Uses `$display("ASSERTION PASSED: ...")` and `$display("ASSERTION FAILED: ...")` for assertion reporting
 
 ## Key Signals
 
