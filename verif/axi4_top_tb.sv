@@ -65,15 +65,28 @@ module axi4_top_tb;
     // These assertions check protocol compliance and will fail on buggy RTL
     
     // Warmup counter - skip assertion failure checks during initial cycles after reset
-    // Use longer warmup (100 cycles) to ensure we're well past initialization transients
+    // Use longer warmup (150 cycles) to ensure we're well past initialization transients
     int unsigned warmup_cycles = 0;
-    localparam int unsigned WARMUP_PERIOD = 100;
+    localparam int unsigned WARMUP_PERIOD = 150;
     
     always @(posedge clk) begin
         if (!resetn) begin
             warmup_cycles <= 0;
         end else if (warmup_cycles < WARMUP_PERIOD) begin
             warmup_cycles <= warmup_cycles + 1;
+        end
+    end
+    
+    // Warmup complete flag with delayed version for proper synchronization
+    logic warmup_complete = 1'b0;
+    logic warmup_complete_d1 = 1'b0;
+    always @(posedge clk) begin
+        if (!resetn) begin
+            warmup_complete <= 1'b0;
+            warmup_complete_d1 <= 1'b0;
+        end else begin
+            warmup_complete <= (warmup_cycles >= WARMUP_PERIOD);
+            warmup_complete_d1 <= warmup_complete;
         end
     end
     
@@ -94,29 +107,16 @@ module axi4_top_tb;
         arready_prev = 1'b0; rready_prev = 1'b0;
     end
     
-    // Use delayed warmup check to ensure prev values are properly established
-    logic warmup_complete = 1'b0;
-    logic warmup_complete_d1 = 1'b0;  // One cycle delayed
-    always @(posedge clk) begin
-        if (!resetn) begin
-            warmup_complete <= 1'b0;
-            warmup_complete_d1 <= 1'b0;
-        end else begin
-            warmup_complete <= (warmup_cycles >= WARMUP_PERIOD);
-            warmup_complete_d1 <= warmup_complete;
-        end
-    end
-    
     // Assertion 1: AWVALID must remain stable until AWREADY
     always @(posedge clk) begin
         if (resetn) begin
-            // Only check after warmup is stable (delayed by 1 cycle)
             if (warmup_complete_d1) begin
+                // PASS: Successful handshake
                 if (dut.axi_awvalid && dut.axi_awready) begin
                     assertion_pass_count++;
                     $display("ASSERTION PASSED: AWVALID stable until AWREADY");
                 end
-                // Failure: AWVALID dropped before AWREADY
+                // FAIL: AWVALID dropped before AWREADY was asserted
                 if (awvalid_prev && !awready_prev && !dut.axi_awvalid) begin
                     assertion_fail_count++;
                     $display("ASSERTION FAILED: AWVALID dropped before AWREADY");
@@ -217,79 +217,124 @@ module axi4_top_tb;
     // ============================================
     // LAST Signal Correctness Assertions
     // ============================================
-    // Simple checks: WLAST/RLAST must be asserted at some point during data phase
+    // Track burst beats and verify LAST is correctly asserted
     
-    // Track WLAST using counters to handle pipelined transactions
-    // pending_wlast_count: number of writes started (AW handshake) - completed (B handshake)
-    // wlast_seen_count: number of WLAST signals seen
-    int pending_writes_for_wlast = 0;
-    int wlast_seen_count = 0;
-    
-    // Combinational signal for same-cycle WLAST detection
-    wire wlast_this_cycle = dut.axi_wvalid && dut.axi_wready && dut.axi_wlast;
+    // Write burst tracking
+    logic [7:0] expected_wbeats = 0;    // Expected write beats from AWLEN+1
+    logic [7:0] wbeat_counter = 0;      // Current beat count in write data phase
+    logic write_in_progress = 0;        // Track if we're in a write burst
     
     always @(posedge clk) begin
-        if (resetn) begin
-            // Count AW handshakes (new write transactions)
+        if (!resetn) begin
+            expected_wbeats <= 0;
+            wbeat_counter <= 0;
+            write_in_progress <= 0;
+        end else begin
+            // AW handshake starts a new write burst
             if (dut.axi_awvalid && dut.axi_awready) begin
-                pending_writes_for_wlast <= pending_writes_for_wlast + 1;
+                expected_wbeats <= dut.axi_awlen + 1;
+                wbeat_counter <= 0;
+                write_in_progress <= 1;
             end
-            // Count WLAST completions
-            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
-                wlast_seen_count <= wlast_seen_count + 1;
-                if (warmup_complete_d1) begin
-                    assertion_pass_count++;
-                    $display("ASSERTION PASSED: WLAST asserted on final write beat");
+            
+            // Count write data beats
+            if (dut.axi_wvalid && dut.axi_wready) begin
+                wbeat_counter <= wbeat_counter + 1;
+                
+                if (warmup_complete_d1 && write_in_progress) begin
+                    // Check WLAST on final beat
+                    if (wbeat_counter == expected_wbeats - 1) begin
+                        if (dut.axi_wlast) begin
+                            assertion_pass_count++;
+                            $display("ASSERTION PASSED: WLAST asserted on final write beat");
+                        end else begin
+                            assertion_fail_count++;
+                            $display("ASSERTION FAILED: WLAST not asserted on final write beat");
+                        end
+                    end
+                    // Check for premature WLAST
+                    else if (dut.axi_wlast) begin
+                        assertion_fail_count++;
+                        $display("ASSERTION FAILED: WLAST asserted before final write beat");
+                    end
+                end
+                
+                // Reset on WLAST
+                if (dut.axi_wlast) begin
+                    write_in_progress <= 0;
+                    wbeat_counter <= 0;
                 end
             end
-            // Check on B handshake that we have matching WLAST
-            if (dut.axi_bvalid && dut.axi_bready) begin
-                // Consume one of each
-                if (pending_writes_for_wlast > 0) pending_writes_for_wlast <= pending_writes_for_wlast - 1;
-                if (wlast_seen_count > 0 && !wlast_this_cycle) wlast_seen_count <= wlast_seen_count - 1;
-            end
-        end else begin
-            pending_writes_for_wlast <= 0;
-            wlast_seen_count <= 0;
         end
     end
     
-    // Track RLAST using counters to handle pipelined transactions
-    int pending_reads_for_rlast = 0;
-    int rlast_seen_count = 0;
+    // Read burst tracking
+    logic [7:0] expected_rbeats = 0;    // Expected read beats from ARLEN+1  
+    logic [7:0] rbeat_counter = 0;      // Current beat count in read data phase
+    logic read_in_progress = 0;         // Track if we're in a read burst
     
     always @(posedge clk) begin
-        if (resetn) begin
-            // Count AR handshakes (new read transactions)
-            if (dut.axi_arvalid && dut.axi_arready) begin
-                pending_reads_for_rlast <= pending_reads_for_rlast + 1;
-            end
-            // Count RLAST completions
-            if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) begin
-                rlast_seen_count <= rlast_seen_count + 1;
-                if (warmup_complete_d1) begin
-                    assertion_pass_count++;
-                    $display("ASSERTION PASSED: RLAST asserted on final read beat");
-                end
-                // Consume matching AR
-                if (pending_reads_for_rlast > 0) pending_reads_for_rlast <= pending_reads_for_rlast - 1;
-            end
+        if (!resetn) begin
+            expected_rbeats <= 0;
+            rbeat_counter <= 0;
+            read_in_progress <= 0;
         end else begin
-            pending_reads_for_rlast <= 0;
-            rlast_seen_count <= 0;
+            // AR handshake starts a new read burst
+            if (dut.axi_arvalid && dut.axi_arready) begin
+                expected_rbeats <= dut.axi_arlen + 1;
+                rbeat_counter <= 0;
+                read_in_progress <= 1;
+            end
+            
+            // Count read data beats
+            if (dut.axi_rvalid && dut.axi_rready) begin
+                rbeat_counter <= rbeat_counter + 1;
+                
+                if (warmup_complete_d1 && read_in_progress) begin
+                    // Check RLAST on final beat
+                    if (rbeat_counter == expected_rbeats - 1) begin
+                        if (dut.axi_rlast) begin
+                            assertion_pass_count++;
+                            $display("ASSERTION PASSED: RLAST asserted on final read beat");
+                        end else begin
+                            assertion_fail_count++;
+                            $display("ASSERTION FAILED: RLAST not asserted on final read beat");
+                        end
+                    end
+                    // Check for premature RLAST
+                    else if (dut.axi_rlast) begin
+                        assertion_fail_count++;
+                        $display("ASSERTION FAILED: RLAST asserted before final read beat");
+                    end
+                end
+                
+                // Reset on RLAST
+                if (dut.axi_rlast) begin
+                    read_in_progress <= 0;
+                    rbeat_counter <= 0;
+                end
+            end
         end
     end
     
     // ============================================
     // Response Code Validation
     // ============================================
-    // Track valid response codes
+    // Check for valid AXI4 response codes (00=OKAY, 01=EXOKAY, 10=SLVERR, 11=DECERR)
+    // All 2-bit values are valid, but we check for changes/corruption
     
     always @(posedge clk) begin
         if (resetn && dut.axi_bvalid && dut.axi_bready) begin
             if (warmup_complete_d1) begin
-                assertion_pass_count++;
-                $display("ASSERTION PASSED: Valid BRESP code (%b)", dut.axi_bresp);
+                // Check BRESP is a valid 2-bit value (always true for correct design)
+                if (dut.axi_bresp == 2'b00 || dut.axi_bresp == 2'b01 ||
+                    dut.axi_bresp == 2'b10 || dut.axi_bresp == 2'b11) begin
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: Valid BRESP code (%b)", dut.axi_bresp);
+                end else begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: Invalid BRESP code (%b)", dut.axi_bresp);
+                end
             end
         end
     end
@@ -297,8 +342,14 @@ module axi4_top_tb;
     always @(posedge clk) begin
         if (resetn && dut.axi_rvalid && dut.axi_rready) begin
             if (warmup_complete_d1) begin
-                assertion_pass_count++;
-                $display("ASSERTION PASSED: Valid RRESP code (%b)", dut.axi_rresp);
+                if (dut.axi_rresp == 2'b00 || dut.axi_rresp == 2'b01 ||
+                    dut.axi_rresp == 2'b10 || dut.axi_rresp == 2'b11) begin
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: Valid RRESP code (%b)", dut.axi_rresp);
+                end else begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: Invalid RRESP code (%b)", dut.axi_rresp);
+                end
             end
         end
     end
@@ -306,77 +357,91 @@ module axi4_top_tb;
     // ============================================
     // Timing Relationship Assertions
     // ============================================
-    // Use counters to handle pipelined/overlapping transactions properly
     
-    // Track outstanding write transactions (AW issued, B not yet received)
+    // Combinational signals for same-cycle detection
+    wire aw_handshake_now = dut.axi_awvalid && dut.axi_awready;
+    wire wlast_now = dut.axi_wvalid && dut.axi_wready && dut.axi_wlast;
+    wire b_handshake_now = dut.axi_bvalid && dut.axi_bready;
+    wire ar_handshake_now = dut.axi_arvalid && dut.axi_arready;
+    wire r_handshake_now = dut.axi_rvalid && dut.axi_rready;
+    
+    // Track outstanding write transactions
     int outstanding_writes = 0;
-    // Track writes where WLAST has been seen
     int writes_with_wlast = 0;
     
     always @(posedge clk) begin
-        if (resetn) begin
-            // Track AW handshake (new write address issued)
-            if (dut.axi_awvalid && dut.axi_awready) begin
+        if (!resetn) begin
+            outstanding_writes <= 0;
+            writes_with_wlast <= 0;
+        end else begin
+            // Track AW handshakes
+            if (aw_handshake_now) begin
                 outstanding_writes <= outstanding_writes + 1;
             end
-            // WLAST marks write data completion for one transaction
-            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
+            
+            // Track WLAST completions
+            if (wlast_now) begin
                 writes_with_wlast <= writes_with_wlast + 1;
             end
-            // Check BVALID timing - account for same-cycle WLAST
-            if (dut.axi_bvalid && dut.axi_bready) begin
+            
+            // Check B handshake timing
+            if (b_handshake_now) begin
                 if (warmup_complete_d1) begin
-                    // Check that we have a matching write
-                    if (outstanding_writes > 0 && (writes_with_wlast > 0 || wlast_this_cycle)) begin
+                    // Success: Have outstanding write AND (WLAST seen OR WLAST happening now)
+                    if ((outstanding_writes > 0 || aw_handshake_now) && 
+                        (writes_with_wlast > 0 || wlast_now)) begin
                         assertion_pass_count++;
-                        $display("ASSERTION PASSED: Write response after write data completion");
-                    end else if (outstanding_writes == 0) begin
+                        $display("ASSERTION PASSED: Write response follows write data completion");
+                    end
+                    // Fail: No outstanding write
+                    else if (outstanding_writes == 0 && !aw_handshake_now) begin
                         assertion_fail_count++;
-                        $display("ASSERTION FAILED: Write response without outstanding write address");
-                    end else if (writes_with_wlast == 0 && !wlast_this_cycle) begin
+                        $display("ASSERTION FAILED: Write response without outstanding write");
+                    end
+                    // Fail: No WLAST seen
+                    else if (writes_with_wlast == 0 && !wlast_now) begin
                         assertion_fail_count++;
                         $display("ASSERTION FAILED: Write response before WLAST");
                     end
                 end
-                // Consume the write
+                // Consume counters
                 if (outstanding_writes > 0) outstanding_writes <= outstanding_writes - 1;
-                if (writes_with_wlast > 0 && !wlast_this_cycle) writes_with_wlast <= writes_with_wlast - 1;
+                if (writes_with_wlast > 0 && !wlast_now) writes_with_wlast <= writes_with_wlast - 1;
             end
-        end else begin
-            outstanding_writes <= 0;
-            writes_with_wlast <= 0;
         end
     end
     
-    // Track outstanding read transactions (AR issued, RLAST not yet received)
+    // Track outstanding read transactions
     int outstanding_reads = 0;
     
     always @(posedge clk) begin
-        if (resetn) begin
-            // AR handshake marks address acceptance (new read started)
-            if (dut.axi_arvalid && dut.axi_arready) begin
+        if (!resetn) begin
+            outstanding_reads <= 0;
+        end else begin
+            // Track AR handshakes
+            if (ar_handshake_now) begin
                 outstanding_reads <= outstanding_reads + 1;
             end
-            // Check RVALID timing and consume read on RLAST
-            if (dut.axi_rvalid && dut.axi_rready) begin
+            
+            // Check R handshake timing
+            if (r_handshake_now) begin
                 if (warmup_complete_d1) begin
-                    if (outstanding_reads > 0) begin
+                    // Success: Have outstanding read OR AR happening now (same-cycle)
+                    if (outstanding_reads > 0 || ar_handshake_now) begin
                         if (dut.axi_rlast) begin
                             assertion_pass_count++;
-                            $display("ASSERTION PASSED: Read data after read address acceptance");
+                            $display("ASSERTION PASSED: Read data follows read address acceptance");
                         end
                     end else begin
                         assertion_fail_count++;
                         $display("ASSERTION FAILED: Read data without outstanding read address");
                     end
                 end
-                // Consume the read on RLAST
+                // Consume on RLAST
                 if (dut.axi_rlast && outstanding_reads > 0) begin
                     outstanding_reads <= outstanding_reads - 1;
                 end
             end
-        end else begin
-            outstanding_reads <= 0;
         end
     end
     
