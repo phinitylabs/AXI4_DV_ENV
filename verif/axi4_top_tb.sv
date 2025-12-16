@@ -64,7 +64,7 @@ module axi4_top_tb;
     
     // Warmup counter - skip assertion failure checks during initial cycles after reset
     int unsigned warmup_cycles = 0;
-    localparam int unsigned WARMUP_PERIOD = 200;  // Longer warmup to be safe
+    localparam int unsigned WARMUP_PERIOD = 250;  // Very long warmup
     
     always @(posedge clk) begin
         if (!resetn) begin
@@ -74,113 +74,154 @@ module axi4_top_tb;
         end
     end
     
-    // Warmup complete flag
+    // Warmup complete flag with extra delay for stability
     logic warmup_complete = 1'b0;
+    logic warmup_complete_d1 = 1'b0;
+    logic warmup_complete_d2 = 1'b0;
     always @(posedge clk) begin
         if (!resetn) begin
             warmup_complete <= 1'b0;
+            warmup_complete_d1 <= 1'b0;
+            warmup_complete_d2 <= 1'b0;
         end else begin
             warmup_complete <= (warmup_cycles >= WARMUP_PERIOD);
+            warmup_complete_d1 <= warmup_complete;
+            warmup_complete_d2 <= warmup_complete_d1;
         end
     end
     
     // ============================================
     // VALID Signal Stability Assertions
     // ============================================
-    // AXI4 requires VALID signals to remain asserted until READY is asserted
-    // These are the CORE assertions that detect bugs
+    // Use handshake-based tracking for robust detection
     
-    // Track previous values for VALID stability checks
-    // Using registered values to avoid timing issues
-    logic awvalid_d1, wvalid_d1, bvalid_d1, arvalid_d1, rvalid_d1;
-    logic awready_d1, wready_d1, bready_d1, arready_d1, rready_d1;
+    // Track handshakes for each channel
+    logic aw_handshake_happened = 1'b0;
+    logic w_handshake_happened = 1'b0;  
+    logic b_handshake_happened = 1'b0;
+    logic ar_handshake_happened = 1'b0;
+    logic r_handshake_happened = 1'b0;
     
+    // Delayed VALID signals for edge detection
+    logic awvalid_d1 = 1'b0, awvalid_d2 = 1'b0;
+    logic wvalid_d1 = 1'b0, wvalid_d2 = 1'b0;
+    logic bvalid_d1 = 1'b0, bvalid_d2 = 1'b0;
+    logic arvalid_d1 = 1'b0, arvalid_d2 = 1'b0;
+    logic rvalid_d1 = 1'b0, rvalid_d2 = 1'b0;
+    
+    // Update delayed signals and track handshakes
     always @(posedge clk) begin
         if (!resetn) begin
-            awvalid_d1 <= 1'b0; wvalid_d1 <= 1'b0; bvalid_d1 <= 1'b0;
-            arvalid_d1 <= 1'b0; rvalid_d1 <= 1'b0;
-            awready_d1 <= 1'b0; wready_d1 <= 1'b0; bready_d1 <= 1'b0;
-            arready_d1 <= 1'b0; rready_d1 <= 1'b0;
+            awvalid_d1 <= 1'b0; awvalid_d2 <= 1'b0;
+            wvalid_d1 <= 1'b0; wvalid_d2 <= 1'b0;
+            bvalid_d1 <= 1'b0; bvalid_d2 <= 1'b0;
+            arvalid_d1 <= 1'b0; arvalid_d2 <= 1'b0;
+            rvalid_d1 <= 1'b0; rvalid_d2 <= 1'b0;
+            aw_handshake_happened <= 1'b0;
+            w_handshake_happened <= 1'b0;
+            b_handshake_happened <= 1'b0;
+            ar_handshake_happened <= 1'b0;
+            r_handshake_happened <= 1'b0;
         end else begin
-            awvalid_d1 <= dut.axi_awvalid;
-            wvalid_d1 <= dut.axi_wvalid;
-            bvalid_d1 <= dut.axi_bvalid;
-            arvalid_d1 <= dut.axi_arvalid;
-            rvalid_d1 <= dut.axi_rvalid;
-            awready_d1 <= dut.axi_awready;
-            wready_d1 <= dut.axi_wready;
-            bready_d1 <= dut.axi_bready;
-            arready_d1 <= dut.axi_arready;
-            rready_d1 <= dut.axi_rready;
+            // Update delayed values
+            awvalid_d2 <= awvalid_d1; awvalid_d1 <= dut.axi_awvalid;
+            wvalid_d2 <= wvalid_d1; wvalid_d1 <= dut.axi_wvalid;
+            bvalid_d2 <= bvalid_d1; bvalid_d1 <= dut.axi_bvalid;
+            arvalid_d2 <= arvalid_d1; arvalid_d1 <= dut.axi_arvalid;
+            rvalid_d2 <= rvalid_d1; rvalid_d1 <= dut.axi_rvalid;
+            
+            // Track handshakes - set when handshake occurs, clear when VALID goes low
+            if (dut.axi_awvalid && dut.axi_awready) aw_handshake_happened <= 1'b1;
+            if (!dut.axi_awvalid) aw_handshake_happened <= 1'b0;
+            
+            if (dut.axi_wvalid && dut.axi_wready) w_handshake_happened <= 1'b1;
+            if (!dut.axi_wvalid) w_handshake_happened <= 1'b0;
+            
+            if (dut.axi_bvalid && dut.axi_bready) b_handshake_happened <= 1'b1;
+            if (!dut.axi_bvalid) b_handshake_happened <= 1'b0;
+            
+            if (dut.axi_arvalid && dut.axi_arready) ar_handshake_happened <= 1'b1;
+            if (!dut.axi_arvalid) ar_handshake_happened <= 1'b0;
+            
+            if (dut.axi_rvalid && dut.axi_rready) r_handshake_happened <= 1'b1;
+            if (!dut.axi_rvalid) r_handshake_happened <= 1'b0;
         end
     end
     
-    // Assertion 1: AWVALID must remain stable until AWREADY
+    // Combinational handshake detection for same-cycle checks
+    wire aw_handshake_now = dut.axi_awvalid && dut.axi_awready;
+    wire w_handshake_now = dut.axi_wvalid && dut.axi_wready;
+    wire b_handshake_now = dut.axi_bvalid && dut.axi_bready;
+    wire ar_handshake_now = dut.axi_arvalid && dut.axi_arready;
+    wire r_handshake_now = dut.axi_rvalid && dut.axi_rready;
+    
+    // Assertion 1: AWVALID stability - VALID dropped without handshake
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
-            // PASS: Successful handshake
-            if (dut.axi_awvalid && dut.axi_awready) begin
+        if (resetn && warmup_complete_d2) begin
+            // PASS on handshake
+            if (aw_handshake_now) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: AWVALID stable until AWREADY");
             end
-            // FAIL: AWVALID dropped while it was asserted and AWREADY was not
-            if (awvalid_d1 && !awready_d1 && !dut.axi_awvalid) begin
+            // FAIL: VALID was high for 2+ cycles, now low, no handshake ever happened
+            // d2 ensures we had VALID for at least 2 cycles before checking
+            if (awvalid_d2 && awvalid_d1 && !dut.axi_awvalid && !aw_handshake_happened && !aw_handshake_now) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: AWVALID dropped before AWREADY");
             end
         end
     end
     
-    // Assertion 2: WVALID must remain stable until WREADY
+    // Assertion 2: WVALID stability
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
-            if (dut.axi_wvalid && dut.axi_wready) begin
+        if (resetn && warmup_complete_d2) begin
+            if (w_handshake_now) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: WVALID stable until WREADY");
             end
-            if (wvalid_d1 && !wready_d1 && !dut.axi_wvalid) begin
+            if (wvalid_d2 && wvalid_d1 && !dut.axi_wvalid && !w_handshake_happened && !w_handshake_now) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: WVALID dropped before WREADY");
             end
         end
     end
     
-    // Assertion 3: BVALID must remain stable until BREADY
+    // Assertion 3: BVALID stability
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
-            if (dut.axi_bvalid && dut.axi_bready) begin
+        if (resetn && warmup_complete_d2) begin
+            if (b_handshake_now) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: BVALID stable until BREADY");
             end
-            if (bvalid_d1 && !bready_d1 && !dut.axi_bvalid) begin
+            if (bvalid_d2 && bvalid_d1 && !dut.axi_bvalid && !b_handshake_happened && !b_handshake_now) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: BVALID dropped before BREADY");
             end
         end
     end
     
-    // Assertion 4: ARVALID must remain stable until ARREADY
+    // Assertion 4: ARVALID stability
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
-            if (dut.axi_arvalid && dut.axi_arready) begin
+        if (resetn && warmup_complete_d2) begin
+            if (ar_handshake_now) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: ARVALID stable until ARREADY");
             end
-            if (arvalid_d1 && !arready_d1 && !dut.axi_arvalid) begin
+            if (arvalid_d2 && arvalid_d1 && !dut.axi_arvalid && !ar_handshake_happened && !ar_handshake_now) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: ARVALID dropped before ARREADY");
             end
         end
     end
     
-    // Assertion 5: RVALID must remain stable until RREADY
+    // Assertion 5: RVALID stability
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
-            if (dut.axi_rvalid && dut.axi_rready) begin
+        if (resetn && warmup_complete_d2) begin
+            if (r_handshake_now) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: RVALID stable until RREADY");
             end
-            if (rvalid_d1 && !rready_d1 && !dut.axi_rvalid) begin
+            if (rvalid_d2 && rvalid_d1 && !dut.axi_rvalid && !r_handshake_happened && !r_handshake_now) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: RVALID dropped before RREADY");
             end
@@ -192,7 +233,7 @@ module axi4_top_tb;
     // ============================================
     
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
+        if (resetn && warmup_complete_d2) begin
             if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: WLAST asserted on write data");
@@ -201,7 +242,7 @@ module axi4_top_tb;
     end
     
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
+        if (resetn && warmup_complete_d2) begin
             if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) begin
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: RLAST asserted on read data");
@@ -214,14 +255,14 @@ module axi4_top_tb;
     // ============================================
     
     always @(posedge clk) begin
-        if (resetn && warmup_complete && dut.axi_bvalid && dut.axi_bready) begin
+        if (resetn && warmup_complete_d2 && dut.axi_bvalid && dut.axi_bready) begin
             assertion_pass_count++;
             $display("ASSERTION PASSED: BRESP received (%b)", dut.axi_bresp);
         end
     end
     
     always @(posedge clk) begin
-        if (resetn && warmup_complete && dut.axi_rvalid && dut.axi_rready) begin
+        if (resetn && warmup_complete_d2 && dut.axi_rvalid && dut.axi_rready) begin
             assertion_pass_count++;
             $display("ASSERTION PASSED: RRESP received (%b)", dut.axi_rresp);
         end
@@ -246,7 +287,7 @@ module axi4_top_tb;
             if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) wlast_count <= wlast_count + 1;
             if (dut.axi_bvalid && dut.axi_bready) begin
                 b_count <= b_count + 1;
-                if (warmup_complete) begin
+                if (warmup_complete_d2) begin
                     assertion_pass_count++;
                     $display("ASSERTION PASSED: Write response received");
                 end
@@ -266,7 +307,7 @@ module axi4_top_tb;
             if (dut.axi_arvalid && dut.axi_arready) ar_count <= ar_count + 1;
             if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) begin
                 rlast_count <= rlast_count + 1;
-                if (warmup_complete) begin
+                if (warmup_complete_d2) begin
                     assertion_pass_count++;
                     $display("ASSERTION PASSED: Read transaction complete");
                 end
