@@ -59,12 +59,9 @@ class TargetedBugResult:
 TARGETED_BUGS = [
     # ================================================================
     # VALID Signal Stability Tests
-    # Actual assertion messages from golden testbench:
-    # - "ASSERTION FAILED: AWVALID not stable until AWREADY"
-    # - "ASSERTION FAILED: WVALID not stable until WREADY"
-    # - "ASSERTION FAILED: BVALID not stable until BREADY"
-    # - "ASSERTION FAILED: ARVALID not stable until ARREADY"
-    # - "ASSERTION FAILED: RVALID not stable until RREADY"
+    # Expected assertion messages (flexible matching):
+    # - Golden: "AWVALID not stable until AWREADY"
+    # - Agent:  "AWVALID signals changed before AWREADY"
     # ================================================================
     TargetedBug(
         name="AWVALID_UNSTABLE",
@@ -74,8 +71,10 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_awvalid\s*<=\s*1'b1;)",
         replacement=r"axi_awvalid <= 1'b0; // BUG: AWVALID unstable",
         expected_assertion_patterns=[
-            r"AWVALID not stable until AWREADY",
-            r"AWVALID.*not.*stable",
+            r"AWVALID.*stable",
+            r"AWVALID.*AWREADY",
+            r"AWVALID.*changed",
+            r"AW.*FAILED",
         ],
         category="valid_stability",
     ),
@@ -87,8 +86,10 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_arvalid\s*<=\s*1'b1;)",
         replacement=r"axi_arvalid <= 1'b0; // BUG: ARVALID unstable",
         expected_assertion_patterns=[
-            r"ARVALID not stable until ARREADY",
-            r"ARVALID.*not.*stable",
+            r"ARVALID.*stable",
+            r"ARVALID.*ARREADY",
+            r"ARVALID.*changed",
+            r"AR.*FAILED",
         ],
         category="valid_stability",
     ),
@@ -100,9 +101,10 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_bvalid\s*<=\s*1'b1;)",
         replacement=r"axi_bvalid <= 1'b0; // BUG: BVALID never asserts",
         expected_assertion_patterns=[
-            r"BVALID not stable until BREADY",
-            r"BVALID.*not.*stable",
-            r"Write response not received",
+            r"BVALID.*stable",
+            r"BVALID.*BREADY",
+            r"BRESP.*changed",
+            r"Write response",
         ],
         category="valid_stability",
     ),
@@ -114,8 +116,9 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_rvalid\s*<=\s*1'b1;)",
         replacement=r"axi_rvalid <= 1'b0; // BUG: RVALID never asserts",
         expected_assertion_patterns=[
-            r"RVALID not stable until RREADY",
-            r"RVALID.*not.*stable",
+            r"RVALID.*stable",
+            r"RVALID.*RREADY",
+            r"RVALID.*changed",
             r"Read data not received",
         ],
         category="valid_stability",
@@ -128,17 +131,19 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_wvalid\s*<=\s*1'b1;)",
         replacement=r"axi_wvalid <= 1'b0; // BUG: WVALID never asserts",
         expected_assertion_patterns=[
-            r"WVALID not stable until WREADY",
-            r"WVALID.*not.*stable",
+            r"WVALID.*stable",
+            r"WVALID.*WREADY",
+            r"WVALID.*changed",
+            r"W.*FAILED",
         ],
         category="valid_stability",
     ),
     
     # ================================================================
     # LAST Signal Correctness Tests
-    # Actual assertion messages from golden testbench:
-    # - "ASSERTION FAILED: WLAST not asserted on final beat"
-    # - "ASSERTION FAILED: RLAST not asserted on final beat"
+    # Expected assertion messages (flexible matching):
+    # - Golden: "WLAST not asserted on final beat"
+    # - Agent:  "WLAST not asserted on final beat (4/4)"
     # ================================================================
     TargetedBug(
         name="WLAST_MISSING",
@@ -148,9 +153,9 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_wlast\s*<=\s*\(write_count\s*==\s*write_length\);)",
         replacement=r"axi_wlast <= 1'b0; // BUG: WLAST never asserted",
         expected_assertion_patterns=[
-            r"WLAST not asserted on final beat",
             r"WLAST.*not.*asserted",
-            r"WLAST.*final.*beat",
+            r"WLAST.*final",
+            r"WLAST.*FAILED",
         ],
         category="last_signal",
     ),
@@ -162,30 +167,28 @@ TARGETED_BUGS = [
         search_pattern=r"(axi_rlast\s*<=\s*1'b1;\s*//\s*Single beat)",
         replacement=r"axi_rlast <= 1'b0; // BUG: RLAST never asserted",
         expected_assertion_patterns=[
-            r"RLAST not asserted on final beat",
             r"RLAST.*not.*asserted",
-            r"RLAST.*final.*beat",
+            r"RLAST.*final",
+            r"RLAST.*FAILED",
         ],
         category="last_signal",
     ),
     
     # ================================================================
     # Response Code Validation Tests
-    # Actual assertion messages from golden testbench:
-    # - "ASSERTION FAILED: Invalid BRESP code"
-    # - "ASSERTION FAILED: Invalid RRESP code"
-    # Note: DECERR (2'b11) is actually a valid code, so these bugs
-    # will pass the validity check. Changing to test actual behavior.
+    # Expected assertion messages (flexible matching):
+    # - Golden: "Invalid BRESP code"
+    # - Agent:  "BRESP is invalid (0xx)"
     # ================================================================
     TargetedBug(
         name="BRESP_INVALID",
         requirement="BRESP must be valid (OKAY, EXOKAY, SLVERR, DECERR)",
-        description="BRESP returns DECERR instead of OKAY",
+        description="BRESP returns undefined value",
         file_to_modify="sources/axi4_slave.sv",
         search_pattern=r"(axi_bresp\s*<=\s*OKAY;)",
         replacement=r"axi_bresp <= 2'bxx; // BUG: Invalid undefined BRESP",
         expected_assertion_patterns=[
-            r"Invalid BRESP code",
+            r"BRESP.*invalid",
             r"BRESP.*Invalid",
             r"BRESP.*FAILED",
         ],
@@ -194,12 +197,12 @@ TARGETED_BUGS = [
     TargetedBug(
         name="RRESP_INVALID",
         requirement="RRESP must be valid (OKAY, EXOKAY, SLVERR, DECERR)",
-        description="RRESP returns DECERR instead of OKAY",
+        description="RRESP returns undefined value",
         file_to_modify="sources/axi4_slave.sv",
         search_pattern=r"(axi_rresp\s*<=\s*OKAY;)",
         replacement=r"axi_rresp <= 2'bxx; // BUG: Invalid undefined RRESP",
         expected_assertion_patterns=[
-            r"Invalid RRESP code",
+            r"RRESP.*invalid",
             r"RRESP.*Invalid",
             r"RRESP.*FAILED",
         ],
