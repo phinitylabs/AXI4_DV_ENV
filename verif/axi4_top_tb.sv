@@ -421,34 +421,113 @@ module axi4_top_tb;
     end
     
     // ============================================
-    // Activity Checks for Read Path
+    // Activity Checks for Read/Write Paths
     // ============================================
-    // The master continuously issues reads. If no AR handshakes occur,
-    // ARVALID is likely stuck at 0 (bug).
+    // The master issues reads and writes. If no handshakes occur,
+    // the VALID signals are likely stuck at 0 (bug).
     
-    localparam int ARVALID_ACTIVITY_TIMEOUT = 500;  // Cycles to expect AR activity
-    int arvalid_activity_counter = 0;
-    logic arvalid_activity_checked = 1'b0;
+    localparam int VALID_ACTIVITY_TIMEOUT = 500;  // Cycles to expect activity
+    int ar_activity_counter = 0;
+    int aw_activity_counter = 0;
+    logic ar_activity_checked = 1'b0;
+    logic aw_activity_checked = 1'b0;
     
     always @(posedge clk) begin
         if (!resetn) begin
-            arvalid_activity_counter <= 0;
-            arvalid_activity_checked <= 1'b0;
-        end else if (warmup_complete && !arvalid_activity_checked) begin
-            arvalid_activity_counter <= arvalid_activity_counter + 1;
+            ar_activity_counter <= 0;
+            ar_activity_checked <= 1'b0;
+        end else if (warmup_complete && !ar_activity_checked) begin
+            ar_activity_counter <= ar_activity_counter + 1;
             
             // If we see an AR handshake, we're good
             if (total_ar_handshakes > 0) begin
-                arvalid_activity_checked <= 1'b1;
+                ar_activity_checked <= 1'b1;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: ARVALID activity detected");
             end
             
             // Timeout - no AR activity at all
-            if (arvalid_activity_counter >= ARVALID_ACTIVITY_TIMEOUT && total_ar_handshakes == 0) begin
-                arvalid_activity_checked <= 1'b1;
+            if (ar_activity_counter >= VALID_ACTIVITY_TIMEOUT && total_ar_handshakes == 0) begin
+                ar_activity_checked <= 1'b1;
                 assertion_fail_count++;
-                $display("ASSERTION FAILED: ARVALID never asserted - read address stuck");
+                $display("ASSERTION FAILED: ARVALID never asserted - read address channel stuck");
+            end
+        end
+    end
+    
+    always @(posedge clk) begin
+        if (!resetn) begin
+            aw_activity_counter <= 0;
+            aw_activity_checked <= 1'b0;
+        end else if (warmup_complete && !aw_activity_checked) begin
+            aw_activity_counter <= aw_activity_counter + 1;
+            
+            // If we see an AW handshake, we're good
+            if (total_aw_handshakes > 0) begin
+                aw_activity_checked <= 1'b1;
+                assertion_pass_count++;
+                $display("ASSERTION PASSED: AWVALID activity detected");
+            end
+            
+            // Timeout - no AW activity at all
+            if (aw_activity_counter >= VALID_ACTIVITY_TIMEOUT && total_aw_handshakes == 0) begin
+                aw_activity_checked <= 1'b1;
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: AWVALID never asserted - write address channel stuck");
+            end
+        end
+    end
+    
+    // WVALID activity check - if we have AW activity but no W activity
+    int w_activity_counter = 0;
+    logic w_activity_checked = 1'b0;
+    
+    always @(posedge clk) begin
+        if (!resetn) begin
+            w_activity_counter <= 0;
+            w_activity_checked <= 1'b0;
+        end else if (warmup_complete && !w_activity_checked && total_aw_handshakes > 0) begin
+            w_activity_counter <= w_activity_counter + 1;
+            
+            // If we see W handshake after AW, we're good
+            if (total_w_handshakes > 0) begin
+                w_activity_checked <= 1'b1;
+                assertion_pass_count++;
+                $display("ASSERTION PASSED: WVALID activity follows AWVALID");
+            end
+            
+            // Timeout - no W activity after AW activity
+            if (w_activity_counter >= VALID_ACTIVITY_TIMEOUT && total_w_handshakes == 0) begin
+                w_activity_checked <= 1'b1;
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: WVALID never asserted after AWVALID - write data channel stuck");
+            end
+        end
+    end
+    
+    // BVALID activity check - if we have W activity but no B activity
+    int b_activity_counter = 0;
+    logic b_activity_checked = 1'b0;
+    
+    always @(posedge clk) begin
+        if (!resetn) begin
+            b_activity_counter <= 0;
+            b_activity_checked <= 1'b0;
+        end else if (warmup_complete && !b_activity_checked && total_w_handshakes > 0) begin
+            b_activity_counter <= b_activity_counter + 1;
+            
+            // If we see B handshake after W, we're good
+            if (total_b_handshakes > 0) begin
+                b_activity_checked <= 1'b1;
+                assertion_pass_count++;
+                $display("ASSERTION PASSED: BVALID activity follows write completion");
+            end
+            
+            // Timeout - no B activity after W activity
+            if (b_activity_counter >= VALID_ACTIVITY_TIMEOUT && total_b_handshakes == 0) begin
+                b_activity_checked <= 1'b1;
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: BVALID never asserted after write data - write response channel stuck");
             end
         end
     end
