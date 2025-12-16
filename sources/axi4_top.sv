@@ -114,6 +114,49 @@ module axi4_top (
         .interrupt_req(interrupt_req),
         .interrupt_ack(interrupt_ack)
     );
+    
+    // ==========================================================================
+    // FIXED COVERAGE MODULE (for grading agent stimulus quality)
+    // This module is NOT modified by agents - it measures how well their
+    // stimulus exercises the DUT.
+    // ==========================================================================
+    axi4_coverage #(
+        .ADDR_WIDTH(32),
+        .DATA_WIDTH(32)
+    ) coverage_monitor (
+        .clk(clk),
+        .resetn(resetn),
+        // Write Address Channel
+        .awaddr(axi_awaddr),
+        .awlen(axi_awlen),
+        .awsize(axi_awsize),
+        .awburst(axi_awburst),
+        .awvalid(axi_awvalid),
+        .awready(axi_awready),
+        // Write Data Channel
+        .wdata(axi_wdata),
+        .wstrb(axi_wstrb),
+        .wlast(axi_wlast),
+        .wvalid(axi_wvalid),
+        .wready(axi_wready),
+        // Write Response Channel
+        .bresp(axi_bresp),
+        .bvalid(axi_bvalid),
+        .bready(axi_bready),
+        // Read Address Channel
+        .araddr(axi_araddr),
+        .arlen(axi_arlen),
+        .arsize(axi_arsize),
+        .arburst(axi_arburst),
+        .arvalid(axi_arvalid),
+        .arready(axi_arready),
+        // Read Data Channel
+        .rdata(axi_rdata),
+        .rresp(axi_rresp),
+        .rlast(axi_rlast),
+        .rvalid(axi_rvalid),
+        .rready(axi_rready)
+    );
 
 endmodule
 
