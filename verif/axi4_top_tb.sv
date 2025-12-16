@@ -22,7 +22,7 @@ module axi4_top_tb;
         resetn = 0;
         #100;
         resetn = 1;
-        #5000;
+        #10000;  // Extended simulation time to see activity after warmup
         $display("==========================================");
         $display("Simulation Complete");
         $display("==========================================");
@@ -100,6 +100,52 @@ module axi4_top_tb;
             wready_prev <= dut.axi_wready;
             bready_prev <= dut.axi_bready;
             rready_prev <= dut.axi_rready;
+        end
+    end
+    
+    // ============================================
+    // Activity Counters for Bug Detection
+    // ============================================
+    int total_aw_handshakes = 0;
+    int total_w_handshakes = 0;
+    int total_b_handshakes = 0;
+    int total_ar_handshakes = 0;
+    int total_r_handshakes = 0;
+    int total_wlast_seen = 0;
+    int total_rlast_seen = 0;
+    
+    // Track when VALID signals have ever been seen high
+    logic awvalid_ever_seen = 1'b0;
+    logic arvalid_ever_seen = 1'b0;
+    logic wvalid_ever_seen = 1'b0;
+    logic bvalid_ever_seen = 1'b0;
+    logic rvalid_ever_seen = 1'b0;
+    
+    always @(posedge clk) begin
+        if (!resetn) begin
+            awvalid_ever_seen <= 1'b0;
+            arvalid_ever_seen <= 1'b0;
+            wvalid_ever_seen <= 1'b0;
+            bvalid_ever_seen <= 1'b0;
+            rvalid_ever_seen <= 1'b0;
+        end else if (warmup_complete) begin
+            if (dut.axi_awvalid) awvalid_ever_seen <= 1'b1;
+            if (dut.axi_arvalid) arvalid_ever_seen <= 1'b1;
+            if (dut.axi_wvalid) wvalid_ever_seen <= 1'b1;
+            if (dut.axi_bvalid) bvalid_ever_seen <= 1'b1;
+            if (dut.axi_rvalid) rvalid_ever_seen <= 1'b1;
+        end
+    end
+    
+    always @(posedge clk) begin
+        if (resetn && warmup_complete) begin
+            if (dut.axi_awvalid && dut.axi_awready) total_aw_handshakes++;
+            if (dut.axi_wvalid && dut.axi_wready) total_w_handshakes++;
+            if (dut.axi_bvalid && dut.axi_bready) total_b_handshakes++;
+            if (dut.axi_arvalid && dut.axi_arready) total_ar_handshakes++;
+            if (dut.axi_rvalid && dut.axi_rready) total_r_handshakes++;
+            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) total_wlast_seen++;
+            if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) total_rlast_seen++;
         end
     end
     
@@ -183,34 +229,28 @@ module axi4_top_tb;
     int write_beat_count = 0;
     int write_burst_len = 0;
     logic write_burst_active = 1'b0;
-    logic wlast_seen = 1'b0;
     
     always @(posedge clk) begin
         if (!resetn) begin
             write_beat_count <= 0;
             write_burst_len <= 0;
             write_burst_active <= 1'b0;
-            wlast_seen <= 1'b0;
         end else if (warmup_complete) begin
             // Start of write burst (AW handshake)
             if (dut.axi_awvalid && dut.axi_awready) begin
                 write_burst_active <= 1'b1;
                 write_burst_len <= dut.axi_awlen + 1; // AWLEN+1 beats
                 write_beat_count <= 0;
-                wlast_seen <= 1'b0;
             end
             
             // Track write data beats
             if (write_burst_active && dut.axi_wvalid && dut.axi_wready) begin
                 write_beat_count <= write_beat_count + 1;
                 if (dut.axi_wlast) begin
-                    wlast_seen <= 1'b1;
                     // Check WLAST on final beat
                     if (write_beat_count + 1 == write_burst_len) begin
                         assertion_pass_count++;
                         $display("ASSERTION PASSED: WLAST asserted on final beat");
-                    end else begin
-                        // WLAST early - not necessarily an error for single-beat
                     end
                     write_burst_active <= 1'b0;
                 end else if (write_beat_count + 1 == write_burst_len) begin
@@ -227,28 +267,24 @@ module axi4_top_tb;
     int read_beat_count = 0;
     int read_burst_len = 0;
     logic read_burst_active = 1'b0;
-    logic rlast_seen = 1'b0;
     
     always @(posedge clk) begin
         if (!resetn) begin
             read_beat_count <= 0;
             read_burst_len <= 0;
             read_burst_active <= 1'b0;
-            rlast_seen <= 1'b0;
         end else if (warmup_complete) begin
             // Start of read burst (AR handshake)
             if (dut.axi_arvalid && dut.axi_arready) begin
                 read_burst_active <= 1'b1;
                 read_burst_len <= dut.axi_arlen + 1; // ARLEN+1 beats
                 read_beat_count <= 0;
-                rlast_seen <= 1'b0;
             end
             
             // Track read data beats
             if (read_burst_active && dut.axi_rvalid && dut.axi_rready) begin
                 read_beat_count <= read_beat_count + 1;
                 if (dut.axi_rlast) begin
-                    rlast_seen <= 1'b1;
                     // Check RLAST on final beat
                     if (read_beat_count + 1 == read_burst_len) begin
                         assertion_pass_count++;
@@ -285,7 +321,7 @@ module axi4_top_tb;
     end
     
     // ============================================
-    // Timing Relationship Checks
+    // Timing Relationship Checks with Timeout
     // ============================================
     // Write response must follow write data completion
     // Read data must follow read address acceptance
@@ -378,27 +414,70 @@ module axi4_top_tb;
     end
     
     // ============================================
-    // End-of-Simulation Checks
+    // Activity Timeout Checks (Bug Detection)
     // ============================================
-    // Check that expected transactions completed
+    // After warmup, we expect activity. If no activity for too long,
+    // this indicates a bug (VALID signal stuck at 0)
     
-    int total_aw_handshakes = 0;
-    int total_w_handshakes = 0;
-    int total_b_handshakes = 0;
-    int total_ar_handshakes = 0;
-    int total_r_handshakes = 0;
-    int total_wlast_seen = 0;
-    int total_rlast_seen = 0;
+    localparam int ACTIVITY_TIMEOUT = 200;  // Cycles after warmup to expect activity
+    int activity_counter = 0;
+    logic activity_check_done = 1'b0;
     
+    // Count cycles since warmup completed
     always @(posedge clk) begin
-        if (resetn && warmup_complete) begin
-            if (dut.axi_awvalid && dut.axi_awready) total_aw_handshakes++;
-            if (dut.axi_wvalid && dut.axi_wready) total_w_handshakes++;
-            if (dut.axi_bvalid && dut.axi_bready) total_b_handshakes++;
-            if (dut.axi_arvalid && dut.axi_arready) total_ar_handshakes++;
-            if (dut.axi_rvalid && dut.axi_rready) total_r_handshakes++;
-            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) total_wlast_seen++;
-            if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) total_rlast_seen++;
+        if (!resetn) begin
+            activity_counter <= 0;
+            activity_check_done <= 1'b0;
+        end else if (warmup_complete && !activity_check_done) begin
+            activity_counter <= activity_counter + 1;
+            
+            // After timeout, check if expected activity occurred
+            if (activity_counter >= ACTIVITY_TIMEOUT) begin
+                activity_check_done <= 1'b1;
+                
+                // Check AWVALID activity (master should have tried to write)
+                if (!awvalid_ever_seen && total_aw_handshakes == 0) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: AWVALID never asserted - signal stuck");
+                end
+                
+                // Check ARVALID activity (master should have tried to read)
+                // Note: This might be too aggressive if the design doesn't read
+                // if (!arvalid_ever_seen && total_ar_handshakes == 0) begin
+                //     assertion_fail_count++;
+                //     $display("ASSERTION FAILED: ARVALID never asserted - signal stuck");
+                // end
+                
+                // Check WVALID activity if we had AW handshakes
+                if (total_aw_handshakes > 0 && !wvalid_ever_seen && total_w_handshakes == 0) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: WVALID never asserted after AWVALID - signal stuck");
+                end
+                
+                // Check BVALID activity if we had write data
+                if (total_wlast_seen > 0 && !bvalid_ever_seen && total_b_handshakes == 0) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: BVALID never asserted after writes - signal stuck");
+                end
+                
+                // Check RVALID activity if we had AR handshakes
+                if (total_ar_handshakes > 0 && !rvalid_ever_seen && total_r_handshakes == 0) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: RVALID never asserted after ARVALID - signal stuck");
+                end
+                
+                // Check WLAST if we had write data
+                if (total_w_handshakes > 0 && total_wlast_seen == 0) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: WLAST never asserted during writes");
+                end
+                
+                // Check RLAST if we had read data
+                if (total_r_handshakes > 0 && total_rlast_seen == 0) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: RLAST never asserted during reads");
+                end
+            end
         end
     end
     
