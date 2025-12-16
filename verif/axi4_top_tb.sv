@@ -364,7 +364,7 @@ module axi4_top_tb;
         $display("Final Report");
         $display("==========================================");
         $display("Transactions: Write=%0d, Read=%0d", write_transaction_count, read_transaction_count);
-        $display("Assertions: Passed=%0d, Failed=%0d", assertion_pass_count, assertion_fail_count);
+        $display("Checks: pass_count=%0d, error_count=%0d", assertion_pass_count, assertion_fail_count);
         $display("==========================================");
     end
 
