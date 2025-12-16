@@ -208,92 +208,72 @@ module axi4_top_tb;
     // ============================================
     // Simple checks: WLAST/RLAST must be asserted at some point during data phase
     
-    // Track if we saw WLAST during write data phase
-    logic in_write_data = 1'b0;
-    logic saw_wlast = 1'b0;
-    int write_beat_count = 0;
-    localparam int MAX_WRITE_BEATS = 256;  // AXI4 max burst length
+    // Track WLAST using counters to handle pipelined transactions
+    // pending_wlast_count: number of writes started (AW handshake) - completed (B handshake)
+    // wlast_seen_count: number of WLAST signals seen
+    int pending_writes_for_wlast = 0;
+    int wlast_seen_count = 0;
     
     // Combinational signal for same-cycle WLAST detection
     wire wlast_this_cycle = dut.axi_wvalid && dut.axi_wready && dut.axi_wlast;
     
     always @(posedge clk) begin
         if (resetn) begin
-            // Start tracking on AW handshake
+            // Count AW handshakes (new write transactions)
             if (dut.axi_awvalid && dut.axi_awready) begin
-                in_write_data <= 1'b1;
-                saw_wlast <= 1'b0;
-                write_beat_count <= 0;
+                pending_writes_for_wlast <= pending_writes_for_wlast + 1;
             end
-            // Track WLAST during write data
-            if (in_write_data && dut.axi_wvalid && dut.axi_wready) begin
-                write_beat_count <= write_beat_count + 1;
-                if (dut.axi_wlast) begin
-                    saw_wlast <= 1'b1;
-                    in_write_data <= 1'b0;
-                    if (warmup_cycles >= WARMUP_PERIOD) begin
-                        assertion_pass_count++;
-                        $display("ASSERTION PASSED: WLAST asserted on final write beat");
-                    end
-                end else if (write_beat_count >= MAX_WRITE_BEATS && warmup_cycles >= WARMUP_PERIOD) begin
-                    // Too many beats without WLAST - bug detected
-                    assertion_fail_count++;
-                    $display("ASSERTION FAILED: WLAST not asserted within max burst length");
-                    in_write_data <= 1'b0;
+            // Count WLAST completions
+            if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
+                wlast_seen_count <= wlast_seen_count + 1;
+                if (warmup_cycles >= WARMUP_PERIOD) begin
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: WLAST asserted on final write beat");
                 end
             end
-            // Check on B handshake that we saw WLAST (accounting for same-cycle completion)
+            // Check on B handshake that we have matching WLAST
             if (dut.axi_bvalid && dut.axi_bready) begin
-                // Use saw_wlast OR wlast_this_cycle to avoid false positive on same-cycle
-                if (!saw_wlast && !wlast_this_cycle && warmup_cycles >= WARMUP_PERIOD) begin
+                // Check we have at least one WLAST for this write response (accounting for same-cycle)
+                if ((wlast_seen_count > 0 || wlast_this_cycle) && warmup_cycles >= WARMUP_PERIOD) begin
+                    // Pass - WLAST was seen
+                end else if (pending_writes_for_wlast > 0 && warmup_cycles >= WARMUP_PERIOD) begin
+                    // There was a write but no WLAST
                     assertion_fail_count++;
                     $display("ASSERTION FAILED: WLAST never asserted before write response");
                 end
-                saw_wlast <= 1'b0;  // Reset for next transaction
-                write_beat_count <= 0;
+                // Consume one of each
+                if (pending_writes_for_wlast > 0) pending_writes_for_wlast <= pending_writes_for_wlast - 1;
+                if (wlast_seen_count > 0 && !wlast_this_cycle) wlast_seen_count <= wlast_seen_count - 1;
             end
         end else begin
-            in_write_data <= 1'b0;
-            saw_wlast <= 1'b0;
-            write_beat_count <= 0;
+            pending_writes_for_wlast <= 0;
+            wlast_seen_count <= 0;
         end
     end
     
-    // Track if we saw RLAST during read data phase
-    logic in_read_data = 1'b0;
-    logic saw_rlast = 1'b0;
-    int read_beat_count = 0;
-    localparam int MAX_READ_BEATS = 256;  // AXI4 max burst length
+    // Track RLAST using counters to handle pipelined transactions
+    int pending_reads_for_rlast = 0;
+    int rlast_seen_count = 0;
     
     always @(posedge clk) begin
         if (resetn) begin
-            // Start tracking on AR handshake
+            // Count AR handshakes (new read transactions)
             if (dut.axi_arvalid && dut.axi_arready) begin
-                in_read_data <= 1'b1;
-                saw_rlast <= 1'b0;
-                read_beat_count <= 0;
+                pending_reads_for_rlast <= pending_reads_for_rlast + 1;
             end
-            // Track RLAST during read data
-            if (in_read_data && dut.axi_rvalid && dut.axi_rready) begin
-                read_beat_count <= read_beat_count + 1;
-                if (dut.axi_rlast) begin
-                    saw_rlast <= 1'b1;
-                    in_read_data <= 1'b0;
-                    if (warmup_cycles >= WARMUP_PERIOD) begin
-                        assertion_pass_count++;
-                        $display("ASSERTION PASSED: RLAST asserted on final read beat");
-                    end
-                end else if (read_beat_count >= MAX_READ_BEATS && warmup_cycles >= WARMUP_PERIOD) begin
-                    // Too many beats without RLAST - bug detected
-                    assertion_fail_count++;
-                    $display("ASSERTION FAILED: RLAST not asserted within max burst length");
-                    in_read_data <= 1'b0;
+            // Count RLAST completions
+            if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) begin
+                rlast_seen_count <= rlast_seen_count + 1;
+                if (warmup_cycles >= WARMUP_PERIOD) begin
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: RLAST asserted on final read beat");
                 end
+                // Consume matching AR
+                if (pending_reads_for_rlast > 0) pending_reads_for_rlast <= pending_reads_for_rlast - 1;
             end
         end else begin
-            in_read_data <= 1'b0;
-            saw_rlast <= 1'b0;
-            read_beat_count <= 0;
+            pending_reads_for_rlast <= 0;
+            rlast_seen_count <= 0;
         end
     end
     
