@@ -372,40 +372,50 @@ module axi4_top_tb;
         end
     end
     
-    // Read data timing
-    logic ar_seen = 1'b0;
-    int ar_timeout_counter = 0;
+    // Read data timing - Track pending read transactions
+    int pending_ar_count = 0;  // Number of AR handshakes awaiting RLAST
+    int ar_no_data_counter = 0;  // Cycles since AR without any RVALID
+    logic ever_saw_rvalid = 1'b0;
     
     always @(posedge clk) begin
         if (!resetn) begin
-            ar_seen <= 1'b0;
-            ar_timeout_counter <= 0;
+            pending_ar_count <= 0;
+            ar_no_data_counter <= 0;
+            ever_saw_rvalid <= 1'b0;
         end else if (warmup_complete) begin
-            // Track AR handshake
+            // Track AR handshake - increment pending count
             if (dut.axi_arvalid && dut.axi_arready) begin
-                ar_seen <= 1'b1;
-                ar_timeout_counter <= 0;
-            end else if (ar_seen) begin
-                ar_timeout_counter <= ar_timeout_counter + 1;
+                pending_ar_count <= pending_ar_count + 1;
             end
             
-            // Check read data follows read address
+            // Track RVALID activity
+            if (dut.axi_rvalid) begin
+                ever_saw_rvalid <= 1'b1;
+            end
+            
+            // Track completed reads (RLAST)
             if (dut.axi_rvalid && dut.axi_rready) begin
-                if (ar_seen) begin
+                if (pending_ar_count > 0) begin
                     assertion_pass_count++;
                     $display("ASSERTION PASSED: Read data follows read address");
                 end
-                if (dut.axi_rlast) begin
-                    ar_seen <= 1'b0;
+                if (dut.axi_rlast && pending_ar_count > 0) begin
+                    pending_ar_count <= pending_ar_count - 1;
                 end
             end
             
-            // Timeout check for read data
-            if (ar_seen && ar_timeout_counter > RESPONSE_TIMEOUT) begin
+            // Count cycles without RVALID when we have pending reads
+            if (pending_ar_count > 0 && !dut.axi_rvalid) begin
+                ar_no_data_counter <= ar_no_data_counter + 1;
+            end else begin
+                ar_no_data_counter <= 0;
+            end
+            
+            // Timeout check - if many cycles with pending AR but no RVALID
+            if (pending_ar_count > 0 && ar_no_data_counter > RESPONSE_TIMEOUT) begin
                 assertion_fail_count++;
-                $display("ASSERTION FAILED: Read data timeout after ARREADY");
-                ar_seen <= 1'b0;
-                ar_timeout_counter <= 0;
+                $display("ASSERTION FAILED: RVALID not asserted after ARVALID - read data timeout");
+                ar_no_data_counter <= 0;
             end
         end
     end
