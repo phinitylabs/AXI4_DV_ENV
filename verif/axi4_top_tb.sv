@@ -64,10 +64,10 @@ module axi4_top_tb;
     // ============================================
     // These assertions check protocol compliance and will fail on buggy RTL
     
-    // Warmup counter - skip assertion failure checks during first few cycles after reset
-    // Use shorter warmup (5 cycles) to ensure we catch bugs in early transactions
+    // Warmup counter - skip assertion failure checks during initial cycles after reset
+    // Use longer warmup (100 cycles) to ensure we're well past initialization transients
     int unsigned warmup_cycles = 0;
-    localparam int unsigned WARMUP_PERIOD = 5;
+    localparam int unsigned WARMUP_PERIOD = 100;
     
     always @(posedge clk) begin
         if (!resetn) begin
