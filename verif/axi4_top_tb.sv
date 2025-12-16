@@ -421,10 +421,37 @@ module axi4_top_tb;
     end
     
     // ============================================
-    // Activity Checks (removed aggressive "signal stuck" checks)
+    // Activity Checks for Read Path
     // ============================================
-    // The baseline DUT design may have incomplete write flow.
-    // Only check for actual protocol violations, not design intent.
+    // The master continuously issues reads. If no AR handshakes occur,
+    // ARVALID is likely stuck at 0 (bug).
+    
+    localparam int ARVALID_ACTIVITY_TIMEOUT = 500;  // Cycles to expect AR activity
+    int arvalid_activity_counter = 0;
+    logic arvalid_activity_checked = 1'b0;
+    
+    always @(posedge clk) begin
+        if (!resetn) begin
+            arvalid_activity_counter <= 0;
+            arvalid_activity_checked <= 1'b0;
+        end else if (warmup_complete && !arvalid_activity_checked) begin
+            arvalid_activity_counter <= arvalid_activity_counter + 1;
+            
+            // If we see an AR handshake, we're good
+            if (total_ar_handshakes > 0) begin
+                arvalid_activity_checked <= 1'b1;
+                assertion_pass_count++;
+                $display("ASSERTION PASSED: ARVALID activity detected");
+            end
+            
+            // Timeout - no AR activity at all
+            if (arvalid_activity_counter >= ARVALID_ACTIVITY_TIMEOUT && total_ar_handshakes == 0) begin
+                arvalid_activity_checked <= 1'b1;
+                assertion_fail_count++;
+                $display("ASSERTION FAILED: ARVALID never asserted - read address stuck");
+            end
+        end
+    end
     
     // Reset behavior check
     logic reset_checked = 1'b0;
