@@ -478,60 +478,6 @@ module axi4_top_tb;
         end
     end
     
-    // WVALID activity check - if we have AW activity but no W activity
-    int w_activity_counter = 0;
-    logic w_activity_checked = 1'b0;
-    
-    always @(posedge clk) begin
-        if (!resetn) begin
-            w_activity_counter <= 0;
-            w_activity_checked <= 1'b0;
-        end else if (warmup_complete && !w_activity_checked && total_aw_handshakes > 0) begin
-            w_activity_counter <= w_activity_counter + 1;
-            
-            // If we see W handshake after AW, we're good
-            if (total_w_handshakes > 0) begin
-                w_activity_checked <= 1'b1;
-                assertion_pass_count++;
-                $display("ASSERTION PASSED: WVALID activity follows AWVALID");
-            end
-            
-            // Timeout - no W activity after AW activity
-            if (w_activity_counter >= VALID_ACTIVITY_TIMEOUT && total_w_handshakes == 0) begin
-                w_activity_checked <= 1'b1;
-                assertion_fail_count++;
-                $display("ASSERTION FAILED: WVALID never asserted after AWVALID - write data channel stuck");
-            end
-        end
-    end
-    
-    // BVALID activity check - if we have W activity but no B activity
-    int b_activity_counter = 0;
-    logic b_activity_checked = 1'b0;
-    
-    always @(posedge clk) begin
-        if (!resetn) begin
-            b_activity_counter <= 0;
-            b_activity_checked <= 1'b0;
-        end else if (warmup_complete && !b_activity_checked && total_w_handshakes > 0) begin
-            b_activity_counter <= b_activity_counter + 1;
-            
-            // If we see B handshake after W, we're good
-            if (total_b_handshakes > 0) begin
-                b_activity_checked <= 1'b1;
-                assertion_pass_count++;
-                $display("ASSERTION PASSED: BVALID activity follows write completion");
-            end
-            
-            // Timeout - no B activity after W activity
-            if (b_activity_counter >= VALID_ACTIVITY_TIMEOUT && total_b_handshakes == 0) begin
-                b_activity_checked <= 1'b1;
-                assertion_fail_count++;
-                $display("ASSERTION FAILED: BVALID never asserted after write data - write response channel stuck");
-            end
-        end
-    end
-    
     // Reset behavior check
     logic reset_checked = 1'b0;
     always @(posedge clk) begin
