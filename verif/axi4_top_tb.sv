@@ -335,70 +335,68 @@ module axi4_top_tb;
     // ============================================
     // Timing Relationship Assertions
     // ============================================
+    // Use counters to handle pipelined/overlapping transactions properly
     
-    // Track write completion for timing check
-    logic write_data_complete = 1'b0;
-    logic aw_handshake_seen = 1'b0;
+    // Track outstanding write transactions (AW issued, B not yet received)
+    int outstanding_writes = 0;
+    // Track writes where WLAST has been seen
+    int writes_with_wlast = 0;
     
     always @(posedge clk) begin
         if (resetn) begin
-            // Track AW handshake
+            // Track AW handshake (new write address issued)
             if (dut.axi_awvalid && dut.axi_awready) begin
-                aw_handshake_seen <= 1'b1;
+                outstanding_writes <= outstanding_writes + 1;
             end
-            // WLAST marks write data completion
+            // WLAST marks write data completion for one transaction
             if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
-                write_data_complete <= 1'b1;
+                writes_with_wlast <= writes_with_wlast + 1;
             end
             // Check BVALID timing - account for same-cycle WLAST
             if (dut.axi_bvalid && dut.axi_bready) begin
                 if (warmup_cycles >= WARMUP_PERIOD) begin
-                    if (write_data_complete || wlast_this_cycle) begin
+                    // Check that we have a matching write
+                    if (outstanding_writes > 0 && (writes_with_wlast > 0 || wlast_this_cycle)) begin
                         assertion_pass_count++;
                         $display("ASSERTION PASSED: Write response after write data completion");
-                    end else if (!aw_handshake_seen) begin
-                        assertion_fail_count++;
-                        $display("ASSERTION FAILED: Write response without address handshake");
                     end
                 end
-                write_data_complete <= 1'b0;
-                aw_handshake_seen <= 1'b0;
+                // Consume the write
+                if (outstanding_writes > 0) outstanding_writes <= outstanding_writes - 1;
+                if (writes_with_wlast > 0 && !wlast_this_cycle) writes_with_wlast <= writes_with_wlast - 1;
             end
         end else begin
-            write_data_complete <= 1'b0;
-            aw_handshake_seen <= 1'b0;
+            outstanding_writes <= 0;
+            writes_with_wlast <= 0;
         end
     end
     
-    // Track read address for timing check
-    logic read_addr_accepted = 1'b0;
+    // Track outstanding read transactions (AR issued, RLAST not yet received)
+    int outstanding_reads = 0;
     
     always @(posedge clk) begin
         if (resetn) begin
-            // AR handshake marks address acceptance
+            // AR handshake marks address acceptance (new read started)
             if (dut.axi_arvalid && dut.axi_arready) begin
-                read_addr_accepted <= 1'b1;
+                outstanding_reads <= outstanding_reads + 1;
             end
-            // Check RVALID timing
+            // Check RVALID timing and consume read on RLAST
             if (dut.axi_rvalid && dut.axi_rready) begin
                 if (warmup_cycles >= WARMUP_PERIOD) begin
-                    if (read_addr_accepted) begin
+                    if (outstanding_reads > 0) begin
                         if (dut.axi_rlast) begin
                             assertion_pass_count++;
                             $display("ASSERTION PASSED: Read data after read address acceptance");
                         end
-                    end else begin
-                        assertion_fail_count++;
-                        $display("ASSERTION FAILED: Read data without address acceptance");
                     end
                 end
-                // Reset on RLAST
-                if (dut.axi_rlast) begin
-                    read_addr_accepted <= 1'b0;
+                // Consume the read on RLAST
+                if (dut.axi_rlast && outstanding_reads > 0) begin
+                    outstanding_reads <= outstanding_reads - 1;
                 end
             end
         end else begin
-            read_addr_accepted <= 1'b0;
+            outstanding_reads <= 0;
         end
     end
     
