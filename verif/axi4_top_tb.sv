@@ -409,26 +409,42 @@ module axi4_top_tb;
     end
     
     // Assertion 11: RLAST must be asserted with last read data
+    // Track if we're in the middle of a read burst
+    logic in_read_burst = 1'b0;
+    int rvalid_gap_count = 0;
+    localparam int RLAST_TIMEOUT = 100;  // Allow gaps between RVALID in bursts
+    
     always @(posedge clk) begin
         if (resetn) begin
             if (dut.axi_rvalid && dut.axi_rlast && dut.axi_rready) begin
                 rlast_seen <= 1'b1;
                 read_beat_count <= 0;
+                in_read_burst <= 1'b0;
+                rvalid_gap_count <= 0;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: RLAST correctly asserted");
             end else if (dut.axi_rvalid && dut.axi_rready && !dut.axi_rlast) begin
                 read_beat_count <= read_beat_count + 1;
                 rlast_seen <= 1'b0;
-            end
-            // Check if RLAST was expected but transaction ended without it
-            if (!dut.axi_rvalid && read_beat_count > 0 && !rlast_seen) begin
-                assertion_fail_count++;
-                $display("ASSERTION FAILED: RLAST not asserted on final beat");
-                read_beat_count <= 0;
+                in_read_burst <= 1'b1;
+                rvalid_gap_count <= 0;
+            end else if (in_read_burst && !dut.axi_rvalid) begin
+                // Count gaps in RVALID during burst (allowed in AXI4)
+                rvalid_gap_count <= rvalid_gap_count + 1;
+                // Only fail if we timeout waiting for more data
+                if (rvalid_gap_count >= RLAST_TIMEOUT) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: RLAST not asserted on final beat (timeout)");
+                    read_beat_count <= 0;
+                    in_read_burst <= 1'b0;
+                    rvalid_gap_count <= 0;
+                end
             end
         end else begin
             rlast_seen <= 1'b0;
             read_beat_count <= 0;
+            in_read_burst <= 1'b0;
+            rvalid_gap_count <= 0;
         end
     end
     
@@ -462,16 +478,10 @@ module axi4_top_tb;
         end
     end
     
-    // Assertion 11: Immediate assertion for protocol check
-    always @(posedge clk) begin
-        if (resetn) begin
-            // Check that valid/ready handshakes are proper
-            assert ((dut.axi_awvalid && dut.axi_awready) || (!dut.axi_awvalid)) else begin
-                assertion_fail_count++;
-                $display("ASSERTION FAILED: Invalid AW handshake state");
-            end
-        end
-    end
+    // Note: Removed faulty "Assertion 11" that incorrectly required AWREADY 
+    // to be high whenever AWVALID is high. In AXI4 protocol, AWVALID can be 
+    // high while waiting for AWREADY - this is normal handshake behavior.
+    // The correct AWVALID stability check is already handled by Assertion 1.
     
     // Assertion 12: Reset behavior - fires once when reset is released
     logic reset_released = 1'b0;
