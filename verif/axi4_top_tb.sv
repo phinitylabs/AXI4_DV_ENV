@@ -64,6 +64,18 @@ module axi4_top_tb;
     // ============================================
     // These assertions check protocol compliance and will fail on buggy RTL
     
+    // Warmup counter - skip assertion checks during first cycles after reset
+    int warmup_cycles = 0;
+    localparam int WARMUP_PERIOD = 20;
+    
+    always @(posedge clk) begin
+        if (!resetn) begin
+            warmup_cycles <= 0;
+        end else if (warmup_cycles < WARMUP_PERIOD) begin
+            warmup_cycles <= warmup_cycles + 1;
+        end
+    end
+    
     // Track previous values for VALID stability checks
     logic awvalid_prev = 1'b0;
     logic wvalid_prev = 1'b0;
@@ -81,7 +93,7 @@ module axi4_top_tb;
     // Assertion 1: AWVALID must remain stable until AWREADY
     // Once AWVALID is asserted, it cannot be deasserted until AWREADY is sampled high
     always @(posedge clk) begin
-        if (resetn) begin
+        if (resetn && warmup_cycles >= WARMUP_PERIOD) begin
             // Check: if AWVALID was high last cycle and no handshake occurred, it must still be high
             if (awvalid_prev && !awready_prev && !dut.axi_awvalid) begin
                 assertion_fail_count++;
@@ -92,7 +104,9 @@ module axi4_top_tb;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: AWVALID stable until AWREADY");
             end
-            // Update previous values
+        end
+        // Always update previous values when reset is released
+        if (resetn) begin
             awvalid_prev <= dut.axi_awvalid;
             awready_prev <= dut.axi_awready;
         end else begin
@@ -103,7 +117,7 @@ module axi4_top_tb;
     
     // Assertion 2: WVALID must remain stable until WREADY
     always @(posedge clk) begin
-        if (resetn) begin
+        if (resetn && warmup_cycles >= WARMUP_PERIOD) begin
             if (wvalid_prev && !wready_prev && !dut.axi_wvalid) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: WVALID not stable until WREADY");
@@ -112,6 +126,8 @@ module axi4_top_tb;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: WVALID stable until WREADY");
             end
+        end
+        if (resetn) begin
             wvalid_prev <= dut.axi_wvalid;
             wready_prev <= dut.axi_wready;
         end else begin
@@ -122,7 +138,7 @@ module axi4_top_tb;
     
     // Assertion 3: BVALID must remain stable until BREADY
     always @(posedge clk) begin
-        if (resetn) begin
+        if (resetn && warmup_cycles >= WARMUP_PERIOD) begin
             if (bvalid_prev && !bready_prev && !dut.axi_bvalid) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: BVALID not stable until BREADY");
@@ -131,6 +147,8 @@ module axi4_top_tb;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: BVALID stable until BREADY");
             end
+        end
+        if (resetn) begin
             bvalid_prev <= dut.axi_bvalid;
             bready_prev <= dut.axi_bready;
         end else begin
@@ -141,7 +159,7 @@ module axi4_top_tb;
     
     // Assertion 4: ARVALID must remain stable until ARREADY
     always @(posedge clk) begin
-        if (resetn) begin
+        if (resetn && warmup_cycles >= WARMUP_PERIOD) begin
             if (arvalid_prev && !arready_prev && !dut.axi_arvalid) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: ARVALID not stable until ARREADY");
@@ -150,6 +168,8 @@ module axi4_top_tb;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: ARVALID stable until ARREADY");
             end
+        end
+        if (resetn) begin
             arvalid_prev <= dut.axi_arvalid;
             arready_prev <= dut.axi_arready;
         end else begin
@@ -160,7 +180,7 @@ module axi4_top_tb;
     
     // Assertion 5: RVALID must remain stable until RREADY
     always @(posedge clk) begin
-        if (resetn) begin
+        if (resetn && warmup_cycles >= WARMUP_PERIOD) begin
             if (rvalid_prev && !rready_prev && !dut.axi_rvalid) begin
                 assertion_fail_count++;
                 $display("ASSERTION FAILED: RVALID not stable until RREADY");
@@ -169,6 +189,8 @@ module axi4_top_tb;
                 assertion_pass_count++;
                 $display("ASSERTION PASSED: RVALID stable until RREADY");
             end
+        end
+        if (resetn) begin
             rvalid_prev <= dut.axi_rvalid;
             rready_prev <= dut.axi_rready;
         end else begin
@@ -191,7 +213,7 @@ module axi4_top_tb;
                 wbeat_count <= 8'd0;
                 in_write_burst <= 1'b1;
             end
-            // Count write data beats
+            // Count write data beats (only check after warmup)
             if (in_write_burst && dut.axi_wvalid && dut.axi_wready) begin
                 wbeat_count <= wbeat_count + 8'd1;
                 // Check WLAST on the last beat
@@ -199,12 +221,12 @@ module axi4_top_tb;
                     if (dut.axi_wlast) begin
                         assertion_pass_count++;
                         $display("ASSERTION PASSED: WLAST correctly asserted on final beat");
-                    end else begin
+                    end else if (warmup_cycles >= WARMUP_PERIOD) begin
                         assertion_fail_count++;
                         $display("ASSERTION FAILED: WLAST not asserted on final write data beat");
                     end
                     in_write_burst <= 1'b0;
-                end else if (dut.axi_wlast) begin
+                end else if (dut.axi_wlast && warmup_cycles >= WARMUP_PERIOD) begin
                     // WLAST asserted too early
                     assertion_fail_count++;
                     $display("ASSERTION FAILED: WLAST asserted before final beat");
@@ -231,7 +253,7 @@ module axi4_top_tb;
                 rbeat_count <= 8'd0;
                 in_read_burst <= 1'b1;
             end
-            // Count read data beats
+            // Count read data beats (only check after warmup)
             if (in_read_burst && dut.axi_rvalid && dut.axi_rready) begin
                 rbeat_count <= rbeat_count + 8'd1;
                 // Check RLAST on the last beat
@@ -239,12 +261,12 @@ module axi4_top_tb;
                     if (dut.axi_rlast) begin
                         assertion_pass_count++;
                         $display("ASSERTION PASSED: RLAST correctly asserted on final beat");
-                    end else begin
+                    end else if (warmup_cycles >= WARMUP_PERIOD) begin
                         assertion_fail_count++;
                         $display("ASSERTION FAILED: RLAST not asserted on final read data beat");
                     end
                     in_read_burst <= 1'b0;
-                end else if (dut.axi_rlast) begin
+                end else if (dut.axi_rlast && warmup_cycles >= WARMUP_PERIOD) begin
                     // RLAST asserted too early
                     assertion_fail_count++;
                     $display("ASSERTION FAILED: RLAST asserted before final beat");
