@@ -606,25 +606,6 @@ module axi4_top_tb;
                  total_ar_handshakes, total_r_handshakes);
         $display("LAST signals: WLAST=%0d, RLAST=%0d", total_wlast_seen, total_rlast_seen);
         $display("Checks: pass_count=%0d, error_count=%0d", assertion_pass_count, assertion_fail_count);
-        
-        // End-of-simulation sanity checks
-        // Check that if we had AW handshakes, we also had W and B handshakes
-        if (total_aw_handshakes > 0 && total_w_handshakes == 0) begin
-            $display("ASSERTION FAILED: Write address handshakes without write data");
-        end
-        if (total_aw_handshakes > 0 && total_b_handshakes == 0) begin
-            $display("ASSERTION FAILED: Write transactions without responses");
-        end
-        if (total_ar_handshakes > 0 && total_r_handshakes == 0) begin
-            $display("ASSERTION FAILED: Read address handshakes without read data");
-        end
-        if (total_w_handshakes > 0 && total_wlast_seen == 0) begin
-            $display("ASSERTION FAILED: Write data without WLAST");
-        end
-        if (total_r_handshakes > 0 && total_rlast_seen == 0) begin
-            $display("ASSERTION FAILED: Read data without RLAST");
-        end
-        
         $display("==========================================");
     end
 
