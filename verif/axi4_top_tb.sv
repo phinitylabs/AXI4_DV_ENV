@@ -211,6 +211,11 @@ module axi4_top_tb;
     // Track if we saw WLAST during write data phase
     logic in_write_data = 1'b0;
     logic saw_wlast = 1'b0;
+    int write_beat_count = 0;
+    localparam int MAX_WRITE_BEATS = 256;  // AXI4 max burst length
+    
+    // Combinational signal for same-cycle WLAST detection
+    wire wlast_this_cycle = dut.axi_wvalid && dut.axi_wready && dut.axi_wlast;
     
     always @(posedge clk) begin
         if (resetn) begin
@@ -218,9 +223,11 @@ module axi4_top_tb;
             if (dut.axi_awvalid && dut.axi_awready) begin
                 in_write_data <= 1'b1;
                 saw_wlast <= 1'b0;
+                write_beat_count <= 0;
             end
             // Track WLAST during write data
             if (in_write_data && dut.axi_wvalid && dut.axi_wready) begin
+                write_beat_count <= write_beat_count + 1;
                 if (dut.axi_wlast) begin
                     saw_wlast <= 1'b1;
                     in_write_data <= 1'b0;
@@ -228,26 +235,35 @@ module axi4_top_tb;
                         assertion_pass_count++;
                         $display("ASSERTION PASSED: WLAST asserted on final write beat");
                     end
+                end else if (write_beat_count >= MAX_WRITE_BEATS && warmup_cycles >= WARMUP_PERIOD) begin
+                    // Too many beats without WLAST - bug detected
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: WLAST not asserted within max burst length");
+                    in_write_data <= 1'b0;
                 end
             end
-            // Check on B handshake that we saw WLAST
+            // Check on B handshake that we saw WLAST (accounting for same-cycle completion)
             if (dut.axi_bvalid && dut.axi_bready) begin
-                if (!saw_wlast && warmup_cycles >= WARMUP_PERIOD) begin
+                // Use saw_wlast OR wlast_this_cycle to avoid false positive on same-cycle
+                if (!saw_wlast && !wlast_this_cycle && warmup_cycles >= WARMUP_PERIOD) begin
                     assertion_fail_count++;
                     $display("ASSERTION FAILED: WLAST never asserted before write response");
                 end
                 saw_wlast <= 1'b0;  // Reset for next transaction
+                write_beat_count <= 0;
             end
         end else begin
             in_write_data <= 1'b0;
             saw_wlast <= 1'b0;
+            write_beat_count <= 0;
         end
     end
     
     // Track if we saw RLAST during read data phase
     logic in_read_data = 1'b0;
     logic saw_rlast = 1'b0;
-    logic pending_rlast_check = 1'b0;
+    int read_beat_count = 0;
+    localparam int MAX_READ_BEATS = 256;  // AXI4 max burst length
     
     always @(posedge clk) begin
         if (resetn) begin
@@ -255,42 +271,64 @@ module axi4_top_tb;
             if (dut.axi_arvalid && dut.axi_arready) begin
                 in_read_data <= 1'b1;
                 saw_rlast <= 1'b0;
+                read_beat_count <= 0;
             end
             // Track RLAST during read data
             if (in_read_data && dut.axi_rvalid && dut.axi_rready) begin
+                read_beat_count <= read_beat_count + 1;
                 if (dut.axi_rlast) begin
                     saw_rlast <= 1'b1;
                     in_read_data <= 1'b0;
-                    pending_rlast_check <= 1'b0;
                     if (warmup_cycles >= WARMUP_PERIOD) begin
                         assertion_pass_count++;
                         $display("ASSERTION PASSED: RLAST asserted on final read beat");
                     end
+                end else if (read_beat_count >= MAX_READ_BEATS && warmup_cycles >= WARMUP_PERIOD) begin
+                    // Too many beats without RLAST - bug detected
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: RLAST not asserted within max burst length");
+                    in_read_data <= 1'b0;
                 end
             end
         end else begin
             in_read_data <= 1'b0;
             saw_rlast <= 1'b0;
-            pending_rlast_check <= 1'b0;
+            read_beat_count <= 0;
         end
     end
     
     // ============================================
     // Response Code Validation
     // ============================================
-    // All 2-bit values are valid AXI4 response codes, just track them
+    // Check for valid AXI4 response codes (catch X/Z values which indicate bugs)
     
     always @(posedge clk) begin
         if (resetn && dut.axi_bvalid && dut.axi_bready) begin
-            assertion_pass_count++;
-            $display("ASSERTION PASSED: Valid BRESP code (%b)", dut.axi_bresp);
+            if (warmup_cycles >= WARMUP_PERIOD) begin
+                // Check for X or Z values in BRESP (indicates bug)
+                if (^dut.axi_bresp === 1'bx) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: BRESP contains X/Z values");
+                end else begin
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: Valid BRESP code (%b)", dut.axi_bresp);
+                end
+            end
         end
     end
     
     always @(posedge clk) begin
         if (resetn && dut.axi_rvalid && dut.axi_rready) begin
-            assertion_pass_count++;
-            $display("ASSERTION PASSED: Valid RRESP code (%b)", dut.axi_rresp);
+            if (warmup_cycles >= WARMUP_PERIOD) begin
+                // Check for X or Z values in RRESP (indicates bug)
+                if (^dut.axi_rresp === 1'bx) begin
+                    assertion_fail_count++;
+                    $display("ASSERTION FAILED: RRESP contains X/Z values");
+                end else begin
+                    assertion_pass_count++;
+                    $display("ASSERTION PASSED: Valid RRESP code (%b)", dut.axi_rresp);
+                end
+            end
         end
     end
     
@@ -300,23 +338,35 @@ module axi4_top_tb;
     
     // Track write completion for timing check
     logic write_data_complete = 1'b0;
+    logic aw_handshake_seen = 1'b0;
     
     always @(posedge clk) begin
         if (resetn) begin
+            // Track AW handshake
+            if (dut.axi_awvalid && dut.axi_awready) begin
+                aw_handshake_seen <= 1'b1;
+            end
             // WLAST marks write data completion
             if (dut.axi_wvalid && dut.axi_wready && dut.axi_wlast) begin
                 write_data_complete <= 1'b1;
             end
-            // Check BVALID timing
+            // Check BVALID timing - account for same-cycle WLAST
             if (dut.axi_bvalid && dut.axi_bready) begin
-                if (write_data_complete) begin
-                    assertion_pass_count++;
-                    $display("ASSERTION PASSED: Write response after write data completion");
+                if (warmup_cycles >= WARMUP_PERIOD) begin
+                    if (write_data_complete || wlast_this_cycle) begin
+                        assertion_pass_count++;
+                        $display("ASSERTION PASSED: Write response after write data completion");
+                    end else if (!aw_handshake_seen) begin
+                        assertion_fail_count++;
+                        $display("ASSERTION FAILED: Write response without address handshake");
+                    end
                 end
                 write_data_complete <= 1'b0;
+                aw_handshake_seen <= 1'b0;
             end
         end else begin
             write_data_complete <= 1'b0;
+            aw_handshake_seen <= 1'b0;
         end
     end
     
@@ -329,13 +379,23 @@ module axi4_top_tb;
             if (dut.axi_arvalid && dut.axi_arready) begin
                 read_addr_accepted <= 1'b1;
             end
-            // Check RVALID timing - only on RLAST to complete the check
-            if (dut.axi_rvalid && dut.axi_rready && dut.axi_rlast) begin
-                if (read_addr_accepted) begin
-                    assertion_pass_count++;
-                    $display("ASSERTION PASSED: Read data after read address acceptance");
+            // Check RVALID timing
+            if (dut.axi_rvalid && dut.axi_rready) begin
+                if (warmup_cycles >= WARMUP_PERIOD) begin
+                    if (read_addr_accepted) begin
+                        if (dut.axi_rlast) begin
+                            assertion_pass_count++;
+                            $display("ASSERTION PASSED: Read data after read address acceptance");
+                        end
+                    end else begin
+                        assertion_fail_count++;
+                        $display("ASSERTION FAILED: Read data without address acceptance");
+                    end
                 end
-                read_addr_accepted <= 1'b0;
+                // Reset on RLAST
+                if (dut.axi_rlast) begin
+                    read_addr_accepted <= 1'b0;
+                end
             end
         end else begin
             read_addr_accepted <= 1'b0;
