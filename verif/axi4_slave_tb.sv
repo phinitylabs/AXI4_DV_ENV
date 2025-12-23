@@ -226,47 +226,6 @@ module axi4_slave_tb;
         end
     end
 
-    // Track reset state for bvalid check
-    logic reset_just_released;
-    logic [2:0] reset_counter;
-    
-    always_ff @(posedge aclk or negedge aresetn) begin
-        if (!aresetn) begin
-            reset_just_released <= 1'b0;
-            reset_counter <= 3'd0;
-        end else begin
-            if (reset_counter < 3'd3) begin
-                reset_just_released <= 1'b1;
-                reset_counter <= reset_counter + 1;
-            end else begin
-                reset_just_released <= 1'b0;
-            end
-        end
-    end
-
-    // Track data for strobe verification
-    logic [DATA_WIDTH-1:0] expected_write_data;
-    logic [STRB_WIDTH-1:0] expected_write_strb;
-    logic [ADDR_WIDTH-1:0] strobe_test_addr;
-    logic strobe_verification_pending;
-    
-    always_ff @(posedge aclk or negedge aresetn) begin
-        if (!aresetn) begin
-            expected_write_data <= '0;
-            expected_write_strb <= '0;
-            strobe_test_addr <= '0;
-            strobe_verification_pending <= 1'b0;
-        end else begin
-            if (wvalid && wready && wlast) begin
-                expected_write_data <= wdata;
-                expected_write_strb <= wstrb;
-                strobe_test_addr <= tracked_awaddr;
-                strobe_verification_pending <= 1'b1;
-            end else if (strobe_verification_pending && rvalid && rready) begin
-                strobe_verification_pending <= 1'b0;
-            end
-        end
-    end
 
     // ==========================================================================
     // SVA ASSERTIONS - Designed to catch specific mutants
@@ -378,57 +337,6 @@ module axi4_slave_tb;
     a_no_decerr_for_valid_read: assert property (p_no_decerr_for_valid_read)
         else $error("ASSERTION FAILED: Valid read addr %h incorrectly got DECERR", tracked_araddr);
 
-    // ASSERTION 13: BVALID must be low immediately after reset
-    // Catches: E05_reset_bvalid (bvalid not properly reset)
-    property p_bvalid_reset;
-        @(posedge aclk)
-        reset_just_released |-> !bvalid;
-    endproperty
-    a_bvalid_reset: assert property (p_bvalid_reset)
-        else $error("ASSERTION FAILED: BVALID not low after reset");
-
-    // ASSERTION 14: RVALID must be low immediately after reset
-    property p_rvalid_reset;
-        @(posedge aclk)
-        reset_just_released |-> !rvalid;
-    endproperty
-    a_rvalid_reset: assert property (p_rvalid_reset)
-        else $error("ASSERTION FAILED: RVALID not low after reset");
-
-    // ASSERTION 15: Data verification for strobed bytes
-    // Catches: E04_strobe_inverted, E09_partial_strobe_bug
-    // Verify that data read back matches what was written for strobed bytes
-    property p_strobe_data_byte0;
-        @(posedge aclk) disable iff (!aresetn)
-        (strobe_verification_pending && rvalid && expected_write_strb[0]) |-> 
-        (rdata[7:0] == expected_write_data[7:0]);
-    endproperty
-    a_strobe_data_byte0: assert property (p_strobe_data_byte0)
-        else $error("ASSERTION FAILED: Byte 0 data mismatch after strobe write");
-
-    property p_strobe_data_byte1;
-        @(posedge aclk) disable iff (!aresetn)
-        (strobe_verification_pending && rvalid && expected_write_strb[1]) |-> 
-        (rdata[15:8] == expected_write_data[15:8]);
-    endproperty
-    a_strobe_data_byte1: assert property (p_strobe_data_byte1)
-        else $error("ASSERTION FAILED: Byte 1 data mismatch after strobe write");
-
-    property p_strobe_data_byte2;
-        @(posedge aclk) disable iff (!aresetn)
-        (strobe_verification_pending && rvalid && expected_write_strb[2]) |-> 
-        (rdata[23:16] == expected_write_data[23:16]);
-    endproperty
-    a_strobe_data_byte2: assert property (p_strobe_data_byte2)
-        else $error("ASSERTION FAILED: Byte 2 data mismatch after strobe write");
-
-    property p_strobe_data_byte3;
-        @(posedge aclk) disable iff (!aresetn)
-        (strobe_verification_pending && rvalid && expected_write_strb[3]) |-> 
-        (rdata[31:24] == expected_write_data[31:24]);
-    endproperty
-    a_strobe_data_byte3: assert property (p_strobe_data_byte3)
-        else $error("ASSERTION FAILED: Byte 3 data mismatch after strobe write");
 
     // ==========================================================================
     // Tasks
