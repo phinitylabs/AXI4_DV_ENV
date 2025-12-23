@@ -17,7 +17,7 @@ The agent should create `verif/axi4_slave_tb.sv` that:
 - `tests/` - Hidden grading scripts
 - `docs/` - Documentation
 
-## Running Tests
+## Running Tests locally with checkers
 
 ```bash
 pytest tests/test_axi4_slave_sva_hidden.py -v
