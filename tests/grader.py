@@ -139,7 +139,7 @@ class AXI4SVAGrader:
         cmd = [
             "verilator",
             "--cc", "--exe", "--build",
-            "-j", "0",
+            "-j", "1",
             "--timing",
             "--assert",
             "-Wno-fatal",
