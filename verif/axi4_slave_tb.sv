@@ -187,17 +187,84 @@ module axi4_slave_tb;
 
     // Track write address for out-of-range detection (address >= 64KB is invalid)
     logic write_out_of_range;
+    logic write_in_range;
     logic [ADDR_WIDTH-1:0] tracked_awaddr;
     
     always_ff @(posedge aclk or negedge aresetn) begin
         if (!aresetn) begin
             write_out_of_range <= 1'b0;
+            write_in_range <= 1'b0;
             tracked_awaddr <= '0;
         end else if (awvalid && awready) begin
             tracked_awaddr <= awaddr;
             write_out_of_range <= (awaddr >= 32'h0001_0000);
+            // Valid range is 0x0000 to 0xFFFF (inclusive)
+            write_in_range <= (awaddr <= 32'h0000_FFFF);
         end else if (bvalid && bready) begin
             write_out_of_range <= 1'b0;
+            write_in_range <= 1'b0;
+        end
+    end
+
+    // Track read address for range detection
+    logic read_out_of_range;
+    logic read_in_range;
+    logic [ADDR_WIDTH-1:0] tracked_araddr;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            read_out_of_range <= 1'b0;
+            read_in_range <= 1'b0;
+            tracked_araddr <= '0;
+        end else if (arvalid && arready) begin
+            tracked_araddr <= araddr;
+            read_out_of_range <= (araddr >= 32'h0001_0000);
+            read_in_range <= (araddr <= 32'h0000_FFFF);
+        end else if (rvalid && rready && rlast) begin
+            read_out_of_range <= 1'b0;
+            read_in_range <= 1'b0;
+        end
+    end
+
+    // Track reset state for bvalid check
+    logic reset_just_released;
+    logic [2:0] reset_counter;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            reset_just_released <= 1'b0;
+            reset_counter <= 3'd0;
+        end else begin
+            if (reset_counter < 3'd3) begin
+                reset_just_released <= 1'b1;
+                reset_counter <= reset_counter + 1;
+            end else begin
+                reset_just_released <= 1'b0;
+            end
+        end
+    end
+
+    // Track data for strobe verification
+    logic [DATA_WIDTH-1:0] expected_write_data;
+    logic [STRB_WIDTH-1:0] expected_write_strb;
+    logic [ADDR_WIDTH-1:0] strobe_test_addr;
+    logic strobe_verification_pending;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            expected_write_data <= '0;
+            expected_write_strb <= '0;
+            strobe_test_addr <= '0;
+            strobe_verification_pending <= 1'b0;
+        end else begin
+            if (wvalid && wready && wlast) begin
+                expected_write_data <= wdata;
+                expected_write_strb <= wstrb;
+                strobe_test_addr <= tracked_awaddr;
+                strobe_verification_pending <= 1'b1;
+            end else if (strobe_verification_pending && rvalid && rready) begin
+                strobe_verification_pending <= 1'b0;
+            end
         end
     end
 
@@ -292,6 +359,76 @@ module axi4_slave_tb;
     endproperty
     a_write_beat_limit: assert property (p_write_beat_limit)
         else $error("ASSERTION FAILED: Write beat %d exceeds expected %d", write_beat_count, expected_write_beats);
+
+    // ASSERTION 11: Valid write addresses (0x0000-0xFFFF) must NOT return DECERR
+    // Catches: E08_zero_address_invalid (addr 0 treated as invalid)
+    // Catches: E03_boundary_off_by_one (addr 0xFFFF treated as invalid)
+    property p_no_decerr_for_valid_addr;
+        @(posedge aclk) disable iff (!aresetn)
+        (bvalid && write_in_range) |-> (bresp != 2'b11);
+    endproperty
+    a_no_decerr_for_valid: assert property (p_no_decerr_for_valid_addr)
+        else $error("ASSERTION FAILED: Valid addr %h incorrectly got DECERR", tracked_awaddr);
+
+    // ASSERTION 12: Valid read addresses must NOT return DECERR
+    property p_no_decerr_for_valid_read;
+        @(posedge aclk) disable iff (!aresetn)
+        (rvalid && read_in_range) |-> (rresp != 2'b11);
+    endproperty
+    a_no_decerr_for_valid_read: assert property (p_no_decerr_for_valid_read)
+        else $error("ASSERTION FAILED: Valid read addr %h incorrectly got DECERR", tracked_araddr);
+
+    // ASSERTION 13: BVALID must be low immediately after reset
+    // Catches: E05_reset_bvalid (bvalid not properly reset)
+    property p_bvalid_reset;
+        @(posedge aclk)
+        reset_just_released |-> !bvalid;
+    endproperty
+    a_bvalid_reset: assert property (p_bvalid_reset)
+        else $error("ASSERTION FAILED: BVALID not low after reset");
+
+    // ASSERTION 14: RVALID must be low immediately after reset
+    property p_rvalid_reset;
+        @(posedge aclk)
+        reset_just_released |-> !rvalid;
+    endproperty
+    a_rvalid_reset: assert property (p_rvalid_reset)
+        else $error("ASSERTION FAILED: RVALID not low after reset");
+
+    // ASSERTION 15: Data verification for strobed bytes
+    // Catches: E04_strobe_inverted, E09_partial_strobe_bug
+    // Verify that data read back matches what was written for strobed bytes
+    property p_strobe_data_byte0;
+        @(posedge aclk) disable iff (!aresetn)
+        (strobe_verification_pending && rvalid && expected_write_strb[0]) |-> 
+        (rdata[7:0] == expected_write_data[7:0]);
+    endproperty
+    a_strobe_data_byte0: assert property (p_strobe_data_byte0)
+        else $error("ASSERTION FAILED: Byte 0 data mismatch after strobe write");
+
+    property p_strobe_data_byte1;
+        @(posedge aclk) disable iff (!aresetn)
+        (strobe_verification_pending && rvalid && expected_write_strb[1]) |-> 
+        (rdata[15:8] == expected_write_data[15:8]);
+    endproperty
+    a_strobe_data_byte1: assert property (p_strobe_data_byte1)
+        else $error("ASSERTION FAILED: Byte 1 data mismatch after strobe write");
+
+    property p_strobe_data_byte2;
+        @(posedge aclk) disable iff (!aresetn)
+        (strobe_verification_pending && rvalid && expected_write_strb[2]) |-> 
+        (rdata[23:16] == expected_write_data[23:16]);
+    endproperty
+    a_strobe_data_byte2: assert property (p_strobe_data_byte2)
+        else $error("ASSERTION FAILED: Byte 2 data mismatch after strobe write");
+
+    property p_strobe_data_byte3;
+        @(posedge aclk) disable iff (!aresetn)
+        (strobe_verification_pending && rvalid && expected_write_strb[3]) |-> 
+        (rdata[31:24] == expected_write_data[31:24]);
+    endproperty
+    a_strobe_data_byte3: assert property (p_strobe_data_byte3)
+        else $error("ASSERTION FAILED: Byte 3 data mismatch after strobe write");
 
     // ==========================================================================
     // Tasks
@@ -494,12 +631,72 @@ module axi4_slave_tb;
         test_count++;
         $display("\n[TEST %0d] Partial Strobe", test_count);
         
-        // Write with partial strobe
-        axi_write(32'h0000_4000, 32'hFFFF_FFFF, 4'd0, 8'd0, 4'b0011, resp);
+        // First clear the memory location with full strobe
+        axi_write(32'h0000_4000, 32'h0000_0000, 4'd0, 8'd0, 4'b1111, resp);
+        
+        // Write with partial strobe (only bytes 0 and 1)
+        axi_write(32'h0000_4000, 32'hAABB_CCDD, 4'd0, 8'd0, 4'b0011, resp);
         axi_read(32'h0000_4000, 4'd0, 8'd0, rd_data, resp);
         
-        pass_count++;
-        $display("  PASS");
+        // Bytes 0 and 1 should have new data (0xCCDD), bytes 2 and 3 should be 0
+        if ((rd_data[15:0] !== 16'hCCDD)) begin
+            fail_count++;
+            $display("  FAIL: Expected bytes 0-1 = 0xCCDD, got %h", rd_data[15:0]);
+        end else begin
+            pass_count++;
+            $display("  PASS: Strobed bytes correct");
+        end
+    endtask
+
+    task automatic test_boundary_address();
+        logic [DATA_WIDTH-1:0] rd_data;
+        logic [1:0] resp;
+        test_count++;
+        $display("\n[TEST %0d] Boundary Address 0xFFFF", test_count);
+        
+        // Address 0xFFFF is the last valid address (boundary)
+        // This should NOT return DECERR
+        axi_write(32'h0000_FFFC, 32'h12345678, 4'd0, 8'd0, 4'b1111, resp);
+        
+        if (resp == 2'b11) begin
+            fail_count++;
+            $display("  FAIL: Address 0xFFFC should be valid, got DECERR");
+        end else begin
+            axi_read(32'h0000_FFFC, 4'd0, 8'd0, rd_data, resp);
+            if (resp == 2'b11) begin
+                fail_count++;
+                $display("  FAIL: Read from 0xFFFC got DECERR");
+            end else begin
+                pass_count++;
+                $display("  PASS");
+            end
+        end
+    endtask
+
+    task automatic test_strobe_byte2();
+        logic [DATA_WIDTH-1:0] rd_data;
+        logic [1:0] resp;
+        test_count++;
+        $display("\n[TEST %0d] Strobe Byte 2 Only", test_count);
+        
+        // Clear memory location
+        axi_write(32'h0000_5000, 32'h0000_0000, 4'd0, 8'd0, 4'b1111, resp);
+        
+        // Write with strobe only on byte 2
+        axi_write(32'h0000_5000, 32'h00FF_0000, 4'd0, 8'd0, 4'b0100, resp);
+        axi_read(32'h0000_5000, 4'd0, 8'd0, rd_data, resp);
+        
+        // Only byte 2 should have 0xFF
+        if (rd_data[23:16] !== 8'hFF) begin
+            fail_count++;
+            $display("  FAIL: Byte 2 should be 0xFF, got %h, full data %h", rd_data[23:16], rd_data);
+        end else if (rd_data[15:0] !== 16'h0000 || rd_data[31:24] !== 8'h00) begin
+            fail_count++;
+            $display("  FAIL: Non-strobed bytes should be 0, got %h", rd_data);
+        end else begin
+            pass_count++;
+            $display("  PASS");
+        end
     endtask
 
     // Main
@@ -519,6 +716,8 @@ module axi4_slave_tb;
         test_id_tracking();
         test_zero_address();
         test_partial_strobe();
+        test_boundary_address();
+        test_strobe_byte2();
         
         repeat(50) @(posedge aclk);
         
