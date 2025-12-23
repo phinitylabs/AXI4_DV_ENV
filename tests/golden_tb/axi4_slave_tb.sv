@@ -444,7 +444,7 @@ module axi4_slave_tb;
         $display("\n[TEST %0d] Decode Error (out of range)", test_count);
         
         // Address >= 64KB should get DECERR
-        axi_write(32'h0001_0000, 32'hBAD_ADDR, 4'd3, 8'd0, 4'b1111, resp);
+        axi_write(32'h0001_0000, 32'hBADA_DD00, 4'd3, 8'd0, 4'b1111, resp);
         
         if (resp !== 2'b11) begin
             fail_count++;
@@ -476,7 +476,7 @@ module axi4_slave_tb;
         $display("\n[TEST %0d] Zero Address", test_count);
         
         // Address 0 is valid
-        axi_write(32'h0000_0000, 32'hZERO_ADDR, 4'd0, 8'd0, 4'b1111, resp);
+        axi_write(32'h0000_0000, 32'h0000_0000, 4'd0, 8'd0, 4'b1111, resp);
         axi_read(32'h0000_0000, 4'd0, 8'd0, rd_data, resp);
         
         if (resp == 2'b11) begin
