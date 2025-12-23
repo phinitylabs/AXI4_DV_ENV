@@ -1,113 +1,191 @@
-# AXI4 Protocol Specification
+# AXI4 Slave Design Specification
 
 ## Overview
 
-AXI4 (Advanced eXtensible Interface 4) is an industry-standard bus protocol developed by ARM as part of the AMBA specification. AXI4 defines high-performance communication between master and slave components in system-on-chip (SoC) designs. It provides point-to-point interconnect and supports multiple outstanding transactions, separate read and write channels, and robust data transfer.
+This document describes the AXI4 slave design and the requirements for writing SystemVerilog Assertions (SVA) to verify protocol compliance.
 
-AXI4 transactions are burst-based, allowing the transfer of multiple data items in a single transaction. Each AXI4 interface consists of five independent unidirectional channels: Write Address (AW), Write Data (W), Write Response (B), Read Address (AR), and Read Data (R).
+## Design Architecture
 
-## AXI4 Protocol Channels
+The AXI4 slave implementation uses a 5-module architecture:
 
-1. **Write Address Channel (AW)**: Carries address and control information for write transactions
-2. **Write Data Channel (W)**: Transports the actual write data
-3. **Write Response Channel (B)**: Carries response signal from slave to master
-4. **Read Address Channel (AR)**: Carries address and control information for read transactions
-5. **Read Data Channel (R)**: Carries read data and response information
-
-Each channel uses a valid-ready handshake (VALID and READY signals) to synchronize data transfer.
-
-## AXI4 Write Transaction
-
-1. Master asserts AWVALID with write address and control information
-2. Slave asserts AWREADY when ready (both signals high = address accepted)
-3. Master asserts WVALID with write data
-4. Slave asserts WREADY when ready (both signals high = data accepted)
-5. Master asserts WLAST on the last data transfer
-6. Slave provides write response on B channel with BVALID and response code
-7. Master asserts BREADY to acknowledge response
-
-## AXI4 Read Transaction
-
-1. Master asserts ARVALID with read address and control information
-2. Slave asserts ARREADY when ready (both signals high = address accepted)
-3. Slave transmits read data on R channel with RVALID
-4. Master asserts RREADY when able to receive data
-5. Slave asserts RLAST on the last data transfer
-
-## Burst Types
-
-- **FIXED**: Address remains constant for every data transfer
-- **INCR**: Address increments after each data transfer
-- **WRAP**: Address wraps around at the boundary of a defined length
-
-Burst length (AWLEN/ARLEN) specifies number of transfers in the burst (0 = 1 transfer, 1 = 2 transfers, etc.).
-
-## Available Modules
-
-The design includes four SystemVerilog modules:
-
-1. **axi4_slave**: AXI4 slave module that responds to master requests, handles write and read transactions, and manages a 4KB memory array
-2. **axi4_master**: AXI4 master module that initiates transactions
-3. **axi4_interrupt**: Interrupt controller module
-4. **axi4_top**: Top-level module that instantiates and connects the master, slave, and interrupt controller
-
-## Task Requirements
-
-Create a SystemVerilog testbench (`verif/axi4_top_tb.sv`) that:
-
-1. **Instantiate the DUT**:
-   - Instantiate `axi4_top` from `sources/axi4_top.sv` (NOT axi4_slave directly!)
-   - The axi4_top module internally connects axi4_master, axi4_slave, and axi4_interrupt
-   - Your testbench monitors the internal AXI signals between master and slave
-   - Provide clock and reset signals
-
-2. **Add Protocol Assertions** to verify:
-   - VALID signal stability (AWVALID, WVALID, ARVALID, BVALID, RVALID must remain stable until corresponding READY)
-   - LAST signal correctness (WLAST, RLAST on final beats)
-   - Response code validation (BRESP, RRESP must be valid: 00=OKAY, 01=EXOKAY, 10=SLVERR, 11=DECERR)
-   - Timing relationships (BVALID after WLAST, RVALID after ARREADY)
-
-3. **Provide Test Stimulus** including:
-   - Single-beat write transactions
-   - Multi-beat burst writes (INCR, FIXED, WRAP)
-   - Read transactions with various burst lengths
-   - Different address ranges
-
-4. **Testbench Quality**:
-   - Must compile AND simulate successfully with Verilator
-   - Use `$display("ASSERTION PASSED: ...")` and `$display("ASSERTION FAILED: ...")` for assertion reporting
-
-## Verification Command
-
-**IMPORTANT**: Your testbench MUST pass this verification before submission:
-
-```bash
-# Compile for simulation (NOT just lint-only!)
-verilator --binary --timing -Wno-fatal \
-    sources/axi4_top.sv sources/axi4_master.sv sources/axi4_slave.sv sources/axi4_interrupt.sv \
-    verif/axi4_top_tb.sv --top-module axi4_top_tb -o sim_tb
-
-# Run simulation
-./sim_tb
+```
+axi4_slave_top
+├── axi4_write_channel  - Write Address (AW) + Write Data (W) + Write Response (B)
+├── axi4_read_channel   - Read Address (AR) + Read Data (R)
+├── axi4_memory         - Backend storage (4KB addressable)
+├── axi4_decoder (wr)   - Write address decoder
+└── axi4_decoder (rd)   - Read address decoder
 ```
 
-**NOTE**: `verilator --lint-only` is NOT sufficient! You MUST test with `--binary` and run the actual simulation.
+## Source Files
 
-## Key Signals
+| File | Description |
+|------|-------------|
+| `sources/axi4_pkg.sv` | Package with AXI4 type definitions and parameters |
+| `sources/axi4_slave_top.sv` | Top-level module that instantiates all submodules |
+| `sources/axi4_write_channel.sv` | Handles AW, W, and B channels |
+| `sources/axi4_read_channel.sv` | Handles AR and R channels |
+| `sources/axi4_memory.sv` | Simple dual-port memory backend |
+| `sources/axi4_decoder.sv` | Address decoder for valid address range |
 
-- **AWADDR/ARADDR**: Address of the first data transfer
-- **AWLEN/ARLEN**: Number of transfers in burst (0-based, so 0 = 1 transfer)
-- **AWSIZE/ARSIZE**: Size of each transfer in bytes (2 = 4 bytes)
-- **AWBURST/ARBURST**: Burst type (00=FIXED, 01=INCR, 10=WRAP)
-- **WDATA/RDATA**: Write and read data
-- **WSTRB**: Write strobes indicating valid data bytes
-- **WLAST/RLAST**: Last transfer in burst indicator
-- **BRESP/RRESP**: Response codes (00=OKAY, 10=SLVERR)
+## AXI4 Interface Signals
 
-## Response Codes
+### Write Address Channel (AW)
 
-- **OKAY (2'b00)**: Normal successful access
-- **SLVERR (2'b10)**: Slave error (e.g., out-of-range address)
+| Signal | Width | Direction | Description |
+|--------|-------|-----------|-------------|
+| AWID | 4 | Input | Write transaction ID |
+| AWADDR | 32 | Input | Write address |
+| AWLEN | 8 | Input | Burst length (0 = 1 beat, 255 = 256 beats) |
+| AWSIZE | 3 | Input | Burst size (010 = 4 bytes) |
+| AWBURST | 2 | Input | Burst type (00=FIXED, 01=INCR, 10=WRAP) |
+| AWVALID | 1 | Input | Address valid |
+| AWREADY | 1 | Output | Slave ready to accept address |
 
-The slave module returns SLVERR for addresses >= 0x1000 (outside the 4KB memory range).
+### Write Data Channel (W)
+
+| Signal | Width | Direction | Description |
+|--------|-------|-----------|-------------|
+| WDATA | 32 | Input | Write data |
+| WSTRB | 4 | Input | Byte strobes (1 bit per byte) |
+| WLAST | 1 | Input | Last beat of write burst |
+| WVALID | 1 | Input | Write data valid |
+| WREADY | 1 | Output | Slave ready to accept data |
+
+### Write Response Channel (B)
+
+| Signal | Width | Direction | Description |
+|--------|-------|-----------|-------------|
+| BID | 4 | Output | Response ID (matches AWID) |
+| BRESP | 2 | Output | Write response (00=OKAY, 11=DECERR) |
+| BVALID | 1 | Output | Response valid |
+| BREADY | 1 | Input | Master ready to accept response |
+
+### Read Address Channel (AR)
+
+| Signal | Width | Direction | Description |
+|--------|-------|-----------|-------------|
+| ARID | 4 | Input | Read transaction ID |
+| ARADDR | 32 | Input | Read address |
+| ARLEN | 8 | Input | Burst length |
+| ARSIZE | 3 | Input | Burst size |
+| ARBURST | 2 | Input | Burst type |
+| ARVALID | 1 | Input | Address valid |
+| ARREADY | 1 | Output | Slave ready to accept address |
+
+### Read Data Channel (R)
+
+| Signal | Width | Direction | Description |
+|--------|-------|-----------|-------------|
+| RID | 4 | Output | Response ID (matches ARID) |
+| RDATA | 32 | Output | Read data |
+| RRESP | 2 | Output | Read response |
+| RLAST | 1 | Output | Last beat of read burst |
+| RVALID | 1 | Output | Read data valid |
+| RREADY | 1 | Input | Master ready to accept data |
+
+## AXI4 Protocol Rules
+
+### VALID/READY Handshake
+
+The AXI4 protocol uses a VALID/READY handshake mechanism:
+
+1. **VALID Stability Rule**: Once VALID is asserted, it must remain HIGH until READY is also HIGH (handshake complete).
+
+2. **No Dependency**: VALID must not depend on READY. The source can assert VALID before READY.
+
+3. **Handshake Completion**: A transfer occurs when both VALID and READY are HIGH on the rising clock edge.
+
+### Response Codes
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 2'b00 | OKAY | Normal access success |
+| 2'b01 | EXOKAY | Exclusive access success |
+| 2'b10 | SLVERR | Slave error |
+| 2'b11 | DECERR | Decode error (address out of range) |
+
+### Burst Types
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 2'b00 | FIXED | Fixed address for all beats |
+| 2'b01 | INCR | Incrementing address |
+| 2'b10 | WRAP | Wrapping burst |
+
+### LAST Signal Timing
+
+- **WLAST**: Must be asserted (HIGH) on the final beat of a write burst
+- **RLAST**: Must be asserted (HIGH) on the final beat of a read burst
+
+The beat count is determined by AWLEN/ARLEN + 1.
+
+## Address Range
+
+- **Valid Range**: 0x0000_0000 to 0x0000_FFFF (64KB)
+- **Out of Range**: Addresses >= 0x0001_0000 return DECERR response
+
+## Your Task: Write SVA Assertions
+
+You need to add SystemVerilog Assertions (SVA) to the testbench to verify AXI4 protocol compliance.
+
+### Required Assertion Categories
+
+1. **VALID Stability Assertions** (5 assertions)
+   - AWVALID must remain stable until AWREADY
+   - WVALID must remain stable until WREADY
+   - ARVALID must remain stable until ARREADY
+   - BVALID must remain stable until BREADY
+   - RVALID must remain stable until RREADY
+
+2. **Response Code Validity** (2 assertions)
+   - BRESP must be a valid response code when BVALID is HIGH
+   - RRESP must be a valid response code when RVALID is HIGH
+
+3. **Protocol Timing** (2-3 assertions)
+   - Write response (BVALID) must follow write data completion
+   - Read data (RVALID) must follow read address acceptance
+   - RLAST must be asserted on the final read beat
+
+### SVA Syntax Reference
+
+```systemverilog
+// Property definition
+property p_signal_stable;
+    @(posedge aclk) disable iff (!aresetn)
+    signal_valid && !signal_ready |=> signal_valid;
+endproperty
+
+// Assertion with error message
+assert property (p_signal_stable) 
+    else $error("ASSERTION FAILED: Signal not stable");
+
+// Implication operators
+// |->  : overlapping implication (same cycle)
+// |=>  : non-overlapping implication (next cycle)
+```
+
+### Example Assertion
+
+```systemverilog
+// AWVALID must remain stable until AWREADY
+property p_awvalid_stable;
+    @(posedge aclk) disable iff (!aresetn)
+    awvalid && !awready |=> awvalid;
+endproperty
+
+a_awvalid_stable: assert property (p_awvalid_stable)
+    else $error("ASSERTION FAILED: AWVALID not stable until AWREADY");
+```
+
+## Files to Modify
+
+- `verif/axi4_slave_tb.sv` - Add your SVA assertions in the marked section
+
+## Success Criteria
+
+Your assertions should:
+1. Compile successfully with Verilator
+2. Not fire on the correct (bug-free) design
+3. Detect protocol violations if they were to occur
 
