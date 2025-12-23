@@ -134,25 +134,7 @@ Requirements:
 - Assertions should compile with Verilator and not produce false positives
 - Use proper SVA syntax with \property\, \ssert property\, and \disable iff\
 
-## Verification Command
 
-After adding assertions, verify your testbench compiles and runs:
-
-\\\ash
-make run
-\\\
-
-Or manually:
-
-\\\ash
-verilator --cc --exe --build -j 0 --timing -Wno-fatal \\
-    sources/axi4_pkg.sv sources/axi4_slave_top.sv sources/axi4_write_channel.sv \\
-    sources/axi4_read_channel.sv sources/axi4_memory.sv sources/axi4_decoder.sv \\
-    verif/axi4_slave_tb.sv verif/sim_main.cpp \\
-    --top-module axi4_slave_tb -o sim_tb -Mdir build/obj_dir
-
-./build/obj_dir/sim_tb
-\\\
 
 ## Files to Modify
 
