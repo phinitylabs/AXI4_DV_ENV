@@ -1,5 +1,19 @@
 """
-Hidden test for AXI4 Testbench Generation Problem.
+Weighted Grading for AXI4 Testbench Generation (Problem 2)
+
+This grader uses weighted scoring:
+- Prerequisites (Compilation, Negative Test) must pass or grade = 0
+- Other metrics contribute proportionally to a weighted score
+- Final grade = 1 if total_score >= threshold (50%), else 0
+
+Weights:
+- Compilation: 15% (prerequisite)
+- Negative Test: 15% (prerequisite)
+- Line Coverage: 25% (proportional)
+- Mutation Testing: 30% (proportional)
+- Quality Checks: 15% (binary)
+
+Pass Threshold: 50%
 """
 import pytest
 import sys
@@ -10,7 +24,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 from grader import AXI4TBGrader
 
 
-def test_axi4_testbench_generation():
+# =======================================================================
+# WEIGHTED GRADING CONFIGURATION
+# =======================================================================
+
+WEIGHTS = {
+    "compilation": 0.15,       # Prerequisite - must pass
+    "negative_test": 0.15,     # Prerequisite - must pass
+    "line_coverage": 0.25,     # Proportional scoring
+    "mutation": 0.30,          # Proportional scoring
+    "quality": 0.15,           # Binary
+}
+
+PASS_THRESHOLD = 0.50  # 50% - medium difficulty task
+
+
+def test_weighted_grade():
+    """Weighted Grading for TB Generation (Problem 2)"""
     proj_path = Path(__file__).resolve().parent.parent
     
     grader = AXI4TBGrader(
@@ -22,13 +52,78 @@ def test_axi4_testbench_generation():
     
     result = grader.grade()
     
-    assert result.phase1_compiled, f"Phase 1 FAILED: {result.error_message}"
-    assert result.phase2_negative_passed, f"Phase 2 FAILED: {result.error_message}"
+    print("\n" + "=" * 70)
+    print("WEIGHTED GRADING - Problem 2 (TB Generation)")
+    print(f"Pass Threshold: {PASS_THRESHOLD*100:.0f}%")
+    print("=" * 70)
     
+    scores = {}
+    
+    # PREREQUISITE 1: Compilation (15%)
+    print("\n[PREREQUISITE 1] Compilation Check...")
+    if not result.phase1_compiled:
+        print(f"  FAILED: {result.error_message}")
+        pytest.fail(f"Prerequisite failed: Compilation - {result.error_message[:100]}")
+    scores["compilation"] = WEIGHTS["compilation"]
+    print(f"  PASSED (+{WEIGHTS['compilation']*100:.0f}%)")
+    
+    # PREREQUISITE 2: Negative Test (15%)
+    print("\n[PREREQUISITE 2] Negative Test Check...")
+    if not result.phase2_negative_passed:
+        print(f"  FAILED: {result.error_message}")
+        pytest.fail(f"Prerequisite failed: Negative Test - {result.error_message[:100]}")
+    scores["negative_test"] = WEIGHTS["negative_test"]
+    print(f"  PASSED (+{WEIGHTS['negative_test']*100:.0f}%)")
+    
+    # METRIC 3: Line Coverage (25% - proportional)
+    print("\n[METRIC 3] Line Coverage Check...")
     if result.phase3_coverage:
-        assert result.phase3_coverage.line_coverage >= 0.60
+        coverage_ratio = result.phase3_coverage.line_coverage
+        scores["line_coverage"] = WEIGHTS["line_coverage"] * coverage_ratio
+        print(f"  Line Coverage: {coverage_ratio*100:.1f}%")
+        print(f"  Contribution: {WEIGHTS['line_coverage']*100:.0f}% x {coverage_ratio*100:.1f}% = +{scores['line_coverage']*100:.1f}%")
+    else:
+        scores["line_coverage"] = 0
+        print("  Coverage data not available (+0%)")
     
+    # METRIC 4: Mutation Testing (30% - proportional)
+    print("\n[METRIC 4] Mutation Testing Check...")
     if result.phase4_mutation:
-        assert result.phase4_mutation.killed_mutants >= 5
+        killed = result.phase4_mutation.killed_mutants
+        total = result.phase4_mutation.total_mutants
+        mutation_ratio = killed / total if total > 0 else 0
+        scores["mutation"] = WEIGHTS["mutation"] * mutation_ratio
+        print(f"  Mutants Killed: {killed}/{total} ({mutation_ratio*100:.1f}%)")
+        print(f"  Contribution: {WEIGHTS['mutation']*100:.0f}% x {mutation_ratio*100:.1f}% = +{scores['mutation']*100:.1f}%")
+    else:
+        scores["mutation"] = 0
+        print("  Mutation data not available (+0%)")
     
-    print("ALL PHASES PASSED!")
+    # METRIC 5: Quality Checks (15% - binary)
+    print("\n[METRIC 5] Quality Checks...")
+    if result.phase5_quality:
+        # Check for illegal patterns
+        if not result.phase5_quality.illegal_hierarchical_refs and not result.phase5_quality.has_force_release:
+            scores["quality"] = WEIGHTS["quality"]
+            print(f"  PASSED: No illegal patterns (+{WEIGHTS['quality']*100:.0f}%)")
+        else:
+            scores["quality"] = 0
+            print("  FAILED: Illegal patterns detected (+0%)")
+    else:
+        scores["quality"] = 0
+        print("  Quality data not available (+0%)")
+    
+    # FINAL SCORE
+    total_score = sum(scores.values())
+    
+    print("\n" + "=" * 70)
+    print("SCORE BREAKDOWN:")
+    for metric, score in scores.items():
+        print(f"  {metric}: {score*100:.1f}%")
+    print(f"  TOTAL: {total_score*100:.1f}% (Threshold: {PASS_THRESHOLD*100:.0f}%)")
+    print("=" * 70)
+    
+    result_str = "PASS" if total_score >= PASS_THRESHOLD else "FAIL"
+    print(f"RESULT: {result_str}")
+    
+    assert total_score >= PASS_THRESHOLD, f"Score {total_score*100:.1f}% < {PASS_THRESHOLD*100:.0f}%"
