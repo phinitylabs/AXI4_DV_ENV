@@ -31,7 +31,7 @@ WEIGHTS = {
     "structural": 0.25,
 }
 
-PASS_THRESHOLD = 0.68
+PASS_THRESHOLD = 0.72
 
 
 def test_weighted_grade():
