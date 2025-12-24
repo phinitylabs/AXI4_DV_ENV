@@ -33,7 +33,7 @@ WEIGHTS = {
     "bug_injection": 0.25,
 }
 
-PASS_THRESHOLD = 0.40
+PASS_THRESHOLD = 0.60
 
 testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_top_tb.sv")
 dut_path = os.getenv("DUT_PATH", 
