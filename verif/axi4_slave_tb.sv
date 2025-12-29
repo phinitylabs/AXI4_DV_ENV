@@ -1,5 +1,6 @@
 // =============================================================================
-// AXI4 Slave Testbench - Baseline (Agent adds assertions)
+// AXI4 Slave Testbench - Golden Reference with Assertions
+// Assertions designed to catch specific mutation bugs
 // =============================================================================
 
 `timescale 1ns/1ps
@@ -106,40 +107,235 @@ module axi4_slave_tb;
     );
 
     // ==========================================================================
-    // YOUR TASK: Add SVA Assertions Here
+    // TRACKING LOGIC FOR ASSERTIONS
     // ==========================================================================
-    // 
-    // Add 8-12 SystemVerilog Assertions (SVA) to verify AXI4 protocol compliance.
-    // Your assertions will be tested against MUTANT designs containing bugs.
-    // To pass, your assertions must DETECT these bugs.
-    //
-    // REQUIREMENTS:
-    // 1. Use proper SVA syntax with `property` and `assert property`
-    // 2. Include `disable iff (!aresetn)` for reset handling
-    // 3. Assertions must NOT fire on the correct design (no false positives)
-    // 4. Minimum 8 assertions
-    //
-    // SUGGESTED ASSERTIONS:
-    // - BRESP/RRESP validity (values must be 00, 01, 10, or 11)
-    // - BID must match AWID, RID must match ARID
-    // - BVALID should require WLAST to have been seen
-    // - RLAST must be set on the final beat of read burst
-    // - DECERR (bresp=11) for out-of-range addresses (>= 0x10000)
-    // - Valid addresses (0x0000-0xFFFF) should NOT get DECERR
-    // - BVALID/RVALID handshake behavior
-    // - Beat count limits for burst transactions
-    //
-    // EXAMPLE ASSERTION:
-    // property p_bresp_valid;
-    //     @(posedge aclk) disable iff (!aresetn)
-    //     bvalid |-> (bresp inside {2'b00, 2'b01, 2'b10, 2'b11});
-    // endproperty
-    // a_bresp_valid: assert property (p_bresp_valid)
-    //     else $error("ASSERTION FAILED: BRESP invalid value");
-    //
+    
+    // Track transaction IDs
+    logic [ID_WIDTH-1:0] saved_awid, saved_arid;
+    logic aw_pending, ar_pending;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            saved_awid <= '0;
+            aw_pending <= 1'b0;
+        end else begin
+            if (awvalid && awready) begin
+                saved_awid <= awid;
+                aw_pending <= 1'b1;
+            end else if (bvalid && bready) begin
+                aw_pending <= 1'b0;
+            end
+        end
+    end
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            saved_arid <= '0;
+            ar_pending <= 1'b0;
+        end else begin
+            if (arvalid && arready) begin
+                saved_arid <= arid;
+                ar_pending <= 1'b1;
+            end else if (rvalid && rready && rlast) begin
+                ar_pending <= 1'b0;
+            end
+        end
+    end
+    
+    // Track WLAST reception
+    logic wlast_seen;
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn)
+            wlast_seen <= 1'b0;
+        else if (wvalid && wready && wlast)
+            wlast_seen <= 1'b1;
+        else if (bvalid && bready)
+            wlast_seen <= 1'b0;
+    end
+    
+    // Beat counters for burst tracking
+    logic [7:0] expected_read_beats, read_beat_count;
+    logic [7:0] expected_write_beats, write_beat_count;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            expected_read_beats <= 8'd0;
+            read_beat_count <= 8'd0;
+        end else begin
+            if (arvalid && arready) begin
+                expected_read_beats <= arlen + 1;
+                read_beat_count <= 8'd0;
+            end else if (rvalid && rready) begin
+                read_beat_count <= read_beat_count + 1;
+            end
+        end
+    end
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            expected_write_beats <= 8'd0;
+            write_beat_count <= 8'd0;
+        end else begin
+            if (awvalid && awready) begin
+                expected_write_beats <= awlen + 1;
+                write_beat_count <= 8'd0;
+            end else if (wvalid && wready) begin
+                write_beat_count <= write_beat_count + 1;
+            end
+        end
+    end
+
+    // Track write address for out-of-range detection (address >= 64KB is invalid)
+    logic write_out_of_range;
+    logic write_in_range;
+    logic [ADDR_WIDTH-1:0] tracked_awaddr;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            write_out_of_range <= 1'b0;
+            write_in_range <= 1'b0;
+            tracked_awaddr <= '0;
+        end else if (awvalid && awready) begin
+            tracked_awaddr <= awaddr;
+            write_out_of_range <= (awaddr >= 32'h0001_0000);
+            // Valid range is 0x0000 to 0xFFFF (inclusive)
+            write_in_range <= (awaddr <= 32'h0000_FFFF);
+        end else if (bvalid && bready) begin
+            write_out_of_range <= 1'b0;
+            write_in_range <= 1'b0;
+        end
+    end
+
+    // Track read address for range detection
+    logic read_out_of_range;
+    logic read_in_range;
+    logic [ADDR_WIDTH-1:0] tracked_araddr;
+    
+    always_ff @(posedge aclk or negedge aresetn) begin
+        if (!aresetn) begin
+            read_out_of_range <= 1'b0;
+            read_in_range <= 1'b0;
+            tracked_araddr <= '0;
+        end else if (arvalid && arready) begin
+            tracked_araddr <= araddr;
+            read_out_of_range <= (araddr >= 32'h0001_0000);
+            read_in_range <= (araddr <= 32'h0000_FFFF);
+        end else if (rvalid && rready && rlast) begin
+            read_out_of_range <= 1'b0;
+            read_in_range <= 1'b0;
+        end
+    end
+
+
+    // ==========================================================================
+    // SVA ASSERTIONS - Designed to catch specific mutants
     // ==========================================================================
 
-    // TODO: Add your SVA assertions here
+    // ASSERTION 1: BRESP must be valid (00=OKAY, 01=EXOKAY, 10=SLVERR, 11=DECERR)
+    // Catches: Any BRESP corruption
+    property p_bresp_valid;
+        @(posedge aclk) disable iff (!aresetn)
+        bvalid |-> (bresp inside {2'b00, 2'b01, 2'b10, 2'b11});
+    endproperty
+    a_bresp_valid: assert property (p_bresp_valid)
+        else $error("ASSERTION FAILED: BRESP invalid value %b", bresp);
+
+    // ASSERTION 2: RRESP must be valid
+    property p_rresp_valid;
+        @(posedge aclk) disable iff (!aresetn)
+        rvalid |-> (rresp inside {2'b00, 2'b01, 2'b10, 2'b11});
+    endproperty
+    a_rresp_valid: assert property (p_rresp_valid)
+        else $error("ASSERTION FAILED: RRESP invalid value");
+
+    // ASSERTION 3: BID must match saved AWID
+    // Catches: E07_rid_stale type bugs for writes
+    property p_bid_match;
+        @(posedge aclk) disable iff (!aresetn)
+        (bvalid && aw_pending) |-> (bid == saved_awid);
+    endproperty
+    a_bid_match: assert property (p_bid_match)
+        else $error("ASSERTION FAILED: BID mismatch expected %h got %h", saved_awid, bid);
+
+    // ASSERTION 4: RID must match saved ARID
+    // Catches: E07_rid_stale
+    property p_rid_match;
+        @(posedge aclk) disable iff (!aresetn)
+        (rvalid && ar_pending) |-> (rid == saved_arid);
+    endproperty
+    a_rid_match: assert property (p_rid_match)
+        else $error("ASSERTION FAILED: RID mismatch expected %h got %h", saved_arid, rid);
+
+    // ASSERTION 5: BVALID requires WLAST to have been received
+    // Catches: E06_single_beat_wlast, timing issues
+    property p_bvalid_needs_wlast;
+        @(posedge aclk) disable iff (!aresetn)
+        bvalid |-> wlast_seen;
+    endproperty
+    a_bvalid_needs_wlast: assert property (p_bvalid_needs_wlast)
+        else $error("ASSERTION FAILED: BVALID without WLAST");
+
+    // ASSERTION 6: RLAST must be set on the final beat of read burst
+    // Catches: E02_rlast_early
+    property p_rlast_final;
+        @(posedge aclk) disable iff (!aresetn)
+        (rvalid && rready && rlast) |-> (read_beat_count + 1 == expected_read_beats);
+    endproperty
+    a_rlast_final: assert property (p_rlast_final)
+        else $error("ASSERTION FAILED: RLAST at wrong beat %d, expected %d", read_beat_count+1, expected_read_beats);
+
+    // ASSERTION 7: DECERR (bresp=11) for out-of-range address
+    // Catches: E10_bresp_always_okay, E08_zero_address_invalid
+    property p_decerr_for_invalid;
+        @(posedge aclk) disable iff (!aresetn)
+        (bvalid && write_out_of_range) |-> (bresp == 2'b11);
+    endproperty
+    a_decerr_for_invalid: assert property (p_decerr_for_invalid)
+        else $error("ASSERTION FAILED: Expected DECERR for out-of-range addr %h, got %b", tracked_awaddr, bresp);
+
+    // ASSERTION 8: BVALID must deassert after bready handshake
+    // Catches: E05_reset_bvalid
+    property p_bvalid_handshake;
+        @(posedge aclk) disable iff (!aresetn)
+        (bvalid && bready) |=> !bvalid;
+    endproperty
+    a_bvalid_handshake: assert property (p_bvalid_handshake)
+        else $error("ASSERTION FAILED: BVALID not deasserted after handshake");
+
+    // ASSERTION 9: RVALID must deassert after rready handshake when rlast
+    property p_rvalid_handshake;
+        @(posedge aclk) disable iff (!aresetn)
+        (rvalid && rready && rlast) |=> !rvalid;
+    endproperty
+    a_rvalid_handshake: assert property (p_rvalid_handshake)
+        else $error("ASSERTION FAILED: RVALID not deasserted after last beat");
+
+    // ASSERTION 10: Beat count must not exceed expected for writes
+    // Catches: E01_max_burst_overflow
+    property p_write_beat_limit;
+        @(posedge aclk) disable iff (!aresetn)
+        (wvalid && wready) |-> (write_beat_count < expected_write_beats);
+    endproperty
+    a_write_beat_limit: assert property (p_write_beat_limit)
+        else $error("ASSERTION FAILED: Write beat %d exceeds expected %d", write_beat_count, expected_write_beats);
+
+    // ASSERTION 11: Valid write addresses (0x0000-0xFFFF) must NOT return DECERR
+    // Catches: E08_zero_address_invalid (addr 0 treated as invalid)
+    // Catches: E03_boundary_off_by_one (addr 0xFFFF treated as invalid)
+    property p_no_decerr_for_valid_addr;
+        @(posedge aclk) disable iff (!aresetn)
+        (bvalid && write_in_range) |-> (bresp != 2'b11);
+    endproperty
+    a_no_decerr_for_valid: assert property (p_no_decerr_for_valid_addr)
+        else $error("ASSERTION FAILED: Valid addr %h incorrectly got DECERR", tracked_awaddr);
+
+    // ASSERTION 12: Valid read addresses must NOT return DECERR
+    property p_no_decerr_for_valid_read;
+        @(posedge aclk) disable iff (!aresetn)
+        (rvalid && read_in_range) |-> (rresp != 2'b11);
+    endproperty
+    a_no_decerr_for_valid_read: assert property (p_no_decerr_for_valid_read)
+        else $error("ASSERTION FAILED: Valid read addr %h incorrectly got DECERR", tracked_araddr);
 
 
     // ==========================================================================
@@ -251,7 +447,7 @@ module axi4_slave_tb;
     endtask
 
     // ==========================================================================
-    // Test Cases
+    // Test Cases - Designed to trigger mutant bugs
     // ==========================================================================
 
     task automatic test_single_write_read();
@@ -366,6 +562,9 @@ module axi4_slave_tb;
         test_count++;
         $display("\n[TEST %0d] Boundary Address 0xFFFF", test_count);
         
+        // Test the exact boundary address 0xFFFF (last valid byte address)
+        // E03 mutant incorrectly treats 0xFFFF as invalid
+        // Using AWSIZE=0 (1-byte transfer) to access 0xFFFF directly
         awsize = 3'b000;  // 1 byte transfer
         axi_write(32'h0000_FFFF, 32'h000000AB, 4'd0, 8'd0, 4'b0001, resp);
         awsize = 3'b010;  // Reset to 4 bytes
@@ -378,6 +577,7 @@ module axi4_slave_tb;
             $display("  PASS: 0xFFFF correctly accepted");
         end
         
+        // Also test 0xFFFC as before
         test_count++;
         $display("\n[TEST %0d] Boundary Address 0xFFFC", test_count);
         axi_write(32'h0000_FFFC, 32'h12345678, 4'd0, 8'd0, 4'b1111, resp);
@@ -404,6 +604,7 @@ module axi4_slave_tb;
         axi_write(32'h0000_5000, 32'h00FF_0000, 4'd0, 8'd0, 4'b0100, resp);
         axi_read(32'h0000_5000, 4'd0, 8'd0, rd_data, resp);
         
+        // Only byte 2 should have 0xFF
         if (rd_data[23:16] !== 8'hFF) begin
             fail_count++;
             $display("  FAIL: Byte 2 should be 0xFF, got %h, full data %h", rd_data[23:16], rd_data);
@@ -422,7 +623,7 @@ module axi4_slave_tb;
         $dumpvars(0, axi4_slave_tb);
         
         $display("================================================================");
-        $display(" AXI4 Slave Testbench - Baseline");
+        $display(" AXI4 Slave Testbench - Golden Reference");
         $display("================================================================");
         
         reset_dut();
@@ -452,4 +653,3 @@ module axi4_slave_tb;
     end
 
 endmodule
-
