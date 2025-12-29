@@ -1,0 +1,8 @@
+[project]
+name = "axi4-slave-sva"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=7.0.0",
+    "pytest-xdist>=3.0.0",
+]
