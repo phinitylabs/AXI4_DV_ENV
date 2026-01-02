@@ -1,5 +1,5 @@
-// AXI4 Master Module - Complete Implementation
-// This module implements an AXI4 master that can perform write and read transactions
+// AXI4 Master Module - Fixed Implementation
+// This module implements an AXI4 master that generates diverse transactions
 
 module axi4_master (
     input logic clk,
@@ -53,32 +53,80 @@ module axi4_master (
     
     master_state_t state, next_state;
     
+    // Transaction counter for generating diverse patterns
+    logic [7:0] txn_count;
+    logic       do_write;
+    
     // Write transaction control
     logic [7:0]   write_count;
-    logic [31:0]  write_base_addr;
     logic [7:0]   write_length;
-    logic [2:0]   write_size;
-    logic [1:0]   write_burst;
-    logic         write_in_progress;
     
     // Read transaction control
     logic [7:0]   read_count;
-    logic [31:0]  read_base_addr;
     logic [7:0]   read_length;
-    logic [2:0]   read_size;
-    logic [1:0]   read_burst;
-    logic         read_in_progress;
     
     // Burst types
     localparam [1:0] FIXED = 2'b00;
     localparam [1:0] INCR  = 2'b01;
     localparam [1:0] WRAP  = 2'b10;
     
-    // Response codes
-    localparam [1:0] OKAY   = 2'b00;
-    localparam [1:0] EXOKAY = 2'b01;
-    localparam [1:0] SLVERR = 2'b10;
-    localparam [1:0] DECERR = 2'b11;
+    // Transaction patterns for coverage
+    // Addresses within valid range 0x000 - 0x3FF
+    logic [31:0] test_addrs [0:7];
+    logic [7:0]  test_lens  [0:7];
+    logic [1:0]  test_bursts[0:7];
+    logic [3:0]  test_strobes[0:7];
+    
+    // Initialize test patterns
+    initial begin
+        // Pattern 0: Single beat at address 0 (cp_addr_zero, cp_burst_single)
+        test_addrs[0] = 32'h0000_0000;
+        test_lens[0]  = 8'h0;
+        test_bursts[0] = INCR;
+        test_strobes[0] = 4'hF;
+        
+        // Pattern 1: INCR burst (cp_burst_incr)
+        test_addrs[1] = 32'h0000_0010;
+        test_lens[1]  = 8'h3;
+        test_bursts[1] = INCR;
+        test_strobes[1] = 4'hF;
+        
+        // Pattern 2: WRAP burst (cp_burst_wrap)
+        test_addrs[2] = 32'h0000_0100;
+        test_lens[2]  = 8'h3;
+        test_bursts[2] = WRAP;
+        test_strobes[2] = 4'hF;
+        
+        // Pattern 3: FIXED burst (cp_burst_fixed)
+        test_addrs[3] = 32'h0000_0200;
+        test_lens[3]  = 8'h3;
+        test_bursts[3] = FIXED;
+        test_strobes[3] = 4'hF;
+        
+        // Pattern 4: Max burst length (cp_burst_max)
+        test_addrs[4] = 32'h0000_0040;
+        test_lens[4]  = 8'hF;
+        test_bursts[4] = INCR;
+        test_strobes[4] = 4'hF;
+        
+        // Pattern 5: Partial strobe (cp_strobe_partial)
+        test_addrs[5] = 32'h0000_0080;
+        test_lens[5]  = 8'h0;
+        test_bursts[5] = INCR;
+        test_strobes[5] = 4'h3;
+        
+        // Pattern 6: Address at boundary (cp_addr_boundary)
+        test_addrs[6] = 32'h0000_03FC;
+        test_lens[6]  = 8'h0;
+        test_bursts[6] = INCR;
+        test_strobes[6] = 4'hF;
+        
+        // Pattern 7: Out of range for DECERR (cp_decode_error)
+        test_addrs[7] = 32'h0000_1000;
+        test_lens[7]  = 8'h0;
+        test_bursts[7] = INCR;
+        test_strobes[7] = 4'hF;
+    end
     
     // State machine
     always_ff @(posedge clk or negedge resetn) begin
@@ -94,8 +142,12 @@ module axi4_master (
         next_state = state;
         case (state)
             IDLE: begin
-                // Can start write or read transaction
-                next_state = IDLE;
+                if (txn_count < 16) begin
+                    if (do_write)
+                        next_state = WRITE_ADDR;
+                    else
+                        next_state = READ_ADDR;
+                end
             end
             WRITE_ADDR: begin
                 if (axi_awvalid && axi_awready) begin
@@ -125,34 +177,42 @@ module axi4_master (
         endcase
     end
     
+    // Transaction counter and write/read alternation
+    always_ff @(posedge clk or negedge resetn) begin
+        if (!resetn) begin
+            txn_count <= 8'h0;
+            do_write <= 1'b1;
+        end else begin
+            if ((state == WRITE_RESP && axi_bvalid && axi_bready) ||
+                (state == READ_DATA && axi_rvalid && axi_rready && axi_rlast)) begin
+                txn_count <= txn_count + 1;
+                do_write <= ~do_write;
+            end
+        end
+    end
+    
+    // Pattern index
+    wire [2:0] pattern_idx = txn_count[2:0];
+    
     // Write Address Channel
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             axi_awvalid <= 1'b0;
             axi_awaddr <= 32'h0;
             axi_awlen <= 8'h0;
-            axi_awsize <= 3'h0;
-            axi_awburst <= 2'h0;
-            write_base_addr <= 32'h0;
+            axi_awsize <= 3'h2;
+            axi_awburst <= INCR;
             write_length <= 8'h0;
-            write_size <= 3'h0;
-            write_burst <= 2'h0;
-            write_in_progress <= 1'b0;
         end else begin
-            if (state == IDLE && !write_in_progress && !read_in_progress) begin
-                // Start a write transaction (example: write to address 0x1000_0000)
-                axi_awaddr <= 32'h1000_0000;
-                axi_awlen <= 8'h3;  // 4 beats (length is 0-based)
-                axi_awsize <= 3'h2; // 4 bytes
-                axi_awburst <= INCR;
+            if (state == IDLE && next_state == WRITE_ADDR) begin
+                axi_awaddr <= test_addrs[pattern_idx];
+                axi_awlen <= test_lens[pattern_idx];
+                axi_awsize <= 3'h2;
+                axi_awburst <= test_bursts[pattern_idx];
                 axi_awvalid <= 1'b1;
-                write_base_addr <= 32'h1000_0000;
-                write_length <= 8'h3;
-                write_size <= 3'h2;
-                write_burst <= INCR;
+                write_length <= test_lens[pattern_idx];
             end else if (axi_awvalid && axi_awready) begin
                 axi_awvalid <= 1'b0;
-                write_in_progress <= 1'b1;
             end
         end
     end
@@ -162,14 +222,13 @@ module axi4_master (
         if (!resetn) begin
             axi_wvalid <= 1'b0;
             axi_wdata <= 32'h0;
-            axi_wstrb <= 4'h0;
+            axi_wstrb <= 4'hF;
             axi_wlast <= 1'b0;
             write_count <= 8'h0;
         end else begin
             if (state == WRITE_DATA && !axi_wvalid) begin
-                // Start sending write data
-                axi_wdata <= 32'hDEAD_BEEF + write_count;
-                axi_wstrb <= 4'hF; // All bytes valid
+                axi_wdata <= 32'hCAFE_0000 + {24'h0, write_count};
+                axi_wstrb <= test_strobes[pattern_idx];
                 axi_wlast <= (write_count == write_length);
                 axi_wvalid <= 1'b1;
             end else if (axi_wvalid && axi_wready) begin
@@ -179,7 +238,7 @@ module axi4_master (
                     write_count <= 8'h0;
                 end else begin
                     write_count <= write_count + 1;
-                    axi_wdata <= 32'hDEAD_BEEF + write_count + 1;
+                    axi_wdata <= 32'hCAFE_0000 + {24'h0, write_count + 8'h1};
                     axi_wlast <= (write_count + 1 == write_length);
                 end
             end
@@ -190,13 +249,11 @@ module axi4_master (
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             axi_bready <= 1'b0;
-            write_in_progress <= 1'b0;
         end else begin
             if (state == WRITE_RESP) begin
                 axi_bready <= 1'b1;
-            end else if (axi_bvalid && axi_bready) begin
+            end else begin
                 axi_bready <= 1'b0;
-                write_in_progress <= 1'b0;
             end
         end
     end
@@ -207,28 +264,19 @@ module axi4_master (
             axi_arvalid <= 1'b0;
             axi_araddr <= 32'h0;
             axi_arlen <= 8'h0;
-            axi_arsize <= 3'h0;
-            axi_arburst <= 2'h0;
-            read_base_addr <= 32'h0;
+            axi_arsize <= 3'h2;
+            axi_arburst <= INCR;
             read_length <= 8'h0;
-            read_size <= 3'h0;
-            read_burst <= 2'h0;
-            read_in_progress <= 1'b0;
         end else begin
-            if (state == IDLE && !write_in_progress && !read_in_progress) begin
-                // Start a read transaction (example: read from address 0x1000_0000)
-                axi_araddr <= 32'h1000_0000;
-                axi_arlen <= 8'h0;  // Single beat
-                axi_arsize <= 3'h2; // 4 bytes
-                axi_arburst <= INCR;
+            if (state == IDLE && next_state == READ_ADDR) begin
+                axi_araddr <= test_addrs[pattern_idx];
+                axi_arlen <= test_lens[pattern_idx];
+                axi_arsize <= 3'h2;
+                axi_arburst <= test_bursts[pattern_idx];
                 axi_arvalid <= 1'b1;
-                read_base_addr <= 32'h1000_0000;
-                read_length <= 8'h0;
-                read_size <= 3'h2;
-                read_burst <= INCR;
+                read_length <= test_lens[pattern_idx];
             end else if (axi_arvalid && axi_arready) begin
                 axi_arvalid <= 1'b0;
-                read_in_progress <= 1'b1;
             end
         end
     end
@@ -237,22 +285,21 @@ module axi4_master (
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             axi_rready <= 1'b0;
-            read_in_progress <= 1'b0;
             read_count <= 8'h0;
         end else begin
             if (state == READ_DATA) begin
                 axi_rready <= 1'b1;
-            end else if (axi_rvalid && axi_rready) begin
-                if (axi_rlast) begin
-                    axi_rready <= 1'b0;
-                    read_in_progress <= 1'b0;
-                    read_count <= 8'h0;
-                end else begin
-                    read_count <= read_count + 1;
+                if (axi_rvalid && axi_rready) begin
+                    if (axi_rlast) begin
+                        read_count <= 8'h0;
+                    end else begin
+                        read_count <= read_count + 1;
+                    end
                 end
+            end else begin
+                axi_rready <= 1'b0;
             end
         end
     end
 
 endmodule
-
