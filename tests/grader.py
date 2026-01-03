@@ -74,7 +74,7 @@ class AXI4SVAGrader:
     """
 
     # Thresholds
-    MUTATION_MIN = 2  # Minimum mutants that must be killed
+    MUTATION_MIN = 5  # Minimum mutants that must be killed
     MIN_ASSERTIONS = 5  # Minimum assertion count
     TIMEOUT_SECONDS = 60
 

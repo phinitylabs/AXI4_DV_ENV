@@ -1,6 +1,6 @@
 // =============================================================================
-// MUTANT E01: Max Burst Overflow Bug
-// Bug: Beat counter uses 7 bits instead of 8, causing overflow at 256 beats
+// MUTANT M09: BVALID Stuck Bug
+// Bug: BVALID remains asserted even after handshake (doesn't deassert properly)
 // =============================================================================
 
 module axi4_write_channel
@@ -45,6 +45,9 @@ module axi4_write_channel
   input  logic                      decode_error
 );
 
+  // ==========================================================================
+  // State Machine
+  // ==========================================================================
   typedef enum logic [2:0] {
     IDLE,
     ADDR_RECV,
@@ -55,23 +58,30 @@ module axi4_write_channel
   
   state_t state, next_state;
   
-  // BUG: beat_count is only 7 bits - will overflow at 128!
+  // ==========================================================================
+  // Burst Tracking Registers
+  // ==========================================================================
   logic [ID_WIDTH-1:0]    txn_id;
   logic [ADDR_WIDTH-1:0]  current_addr;
   logic [7:0]             burst_len;
-  logic [6:0]             beat_count;  // BUG: Should be [7:0]
+  logic [7:0]             beat_count;
   logic [2:0]             burst_size;
   logic [1:0]             burst_type;
   logic                   has_decode_error;
   logic                   has_wlast_error;
   
+  // Address increment calculation
   logic [ADDR_WIDTH-1:0] addr_incr;
   assign addr_incr = (1 << burst_size);
   
+  // Wrap boundary calculation
   logic [ADDR_WIDTH-1:0] wrap_size;
   logic [ADDR_WIDTH-1:0] wrap_boundary;
   assign wrap_size = (burst_len + 1) << burst_size;
   
+  // ==========================================================================
+  // State Machine - Sequential
+  // ==========================================================================
   always_ff @(posedge clk or negedge aresetn) begin
     if (!aresetn) begin
       state <= IDLE;
@@ -80,6 +90,9 @@ module axi4_write_channel
     end
   end
   
+  // ==========================================================================
+  // State Machine - Combinational
+  // ==========================================================================
   always_comb begin
     next_state = state;
     case (state)
@@ -87,27 +100,35 @@ module axi4_write_channel
         if (awvalid && awready)
           next_state = ADDR_RECV;
       end
+      
       ADDR_RECV: begin
         next_state = DATA_BURST;
       end
+      
       DATA_BURST: begin
         if (wvalid && wready && wlast)
           next_state = SEND_RESP;
       end
+      
       SEND_RESP: begin
         if (bready)
           next_state = IDLE;
         else
           next_state = WAIT_BREADY;
       end
+      
       WAIT_BREADY: begin
         if (bready)
           next_state = IDLE;
       end
+      
       default: next_state = IDLE;
     endcase
   end
   
+  // ==========================================================================
+  // Burst Parameter Capture and Address Generation
+  // ==========================================================================
   always_ff @(posedge clk or negedge aresetn) begin
     if (!aresetn) begin
       txn_id           <= '0;
@@ -134,30 +155,45 @@ module axi4_write_channel
             has_wlast_error  <= 1'b0;
           end
         end
+        
         DATA_BURST: begin
           if (wvalid && wready) begin
             beat_count <= beat_count + 1'b1;
-            if ((beat_count == burst_len[6:0]) && !wlast) begin  // BUG: truncated comparison
+            
+            // Check for WLAST error (WLAST not asserted on final beat)
+            if ((beat_count == burst_len) && !wlast) begin
               has_wlast_error <= 1'b1;
             end
+            
+            // Address generation based on burst type
             case (burst_type)
-              BURST_FIXED: ;
-              BURST_INCR: current_addr <= current_addr + addr_incr;
+              BURST_FIXED: begin
+                // Address stays the same
+              end
+              BURST_INCR: begin
+                current_addr <= current_addr + addr_incr;
+              end
               BURST_WRAP: begin
                 if ((current_addr + addr_incr) >= (wrap_boundary + wrap_size))
                   current_addr <= wrap_boundary;
                 else
                   current_addr <= current_addr + addr_incr;
               end
-              default: current_addr <= current_addr + addr_incr;
+              default: begin
+                current_addr <= current_addr + addr_incr;
+              end
             endcase
           end
         end
+        
         default: ;
       endcase
     end
   end
   
+  // ==========================================================================
+  // Response Generation
+  // ==========================================================================
   logic [1:0] resp_value;
   always_comb begin
     if (has_decode_error)
@@ -168,11 +204,23 @@ module axi4_write_channel
       resp_value = RESP_OKAY;
   end
   
+  // ==========================================================================
+  // Output Assignments
+  // ==========================================================================
+  
+  // AW Channel
   assign awready = (state == IDLE);
+  
+  // W Channel
   assign wready = (state == DATA_BURST);
+  
+  // B Channel
   assign bid    = txn_id;
   assign bresp  = resp_value;
-  assign bvalid = (state == SEND_RESP) || (state == WAIT_BREADY);
+  // BUG: BVALID stays high in IDLE after a transaction, violating handshake protocol
+  assign bvalid = (state == SEND_RESP) || (state == WAIT_BREADY) || (state == IDLE && txn_id != '0);
+  
+  // Memory Interface
   assign mem_wr_en   = (state == DATA_BURST) && wvalid && wready && !has_decode_error;
   assign mem_wr_addr = current_addr;
   assign mem_wr_data = wdata;
