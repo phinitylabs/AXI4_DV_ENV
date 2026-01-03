@@ -1,4 +1,5 @@
 #include <verilated.h>
+#include <verilated_cov.h>
 #include "Vaxi4_top_tb.h"
 
 int main(int argc, char** argv) {
@@ -13,6 +14,10 @@ int main(int argc, char** argv) {
     }
     
     top->final();
+    
+    // Explicitly write coverage data
+    VerilatedCov::write("coverage.dat");
+    
     delete top;
     delete contextp;
     return 0;
