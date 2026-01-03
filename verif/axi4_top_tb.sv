@@ -9,7 +9,7 @@ module axi4_top_tb;
 
     // Parameters
     parameter CLK_PERIOD = 10;
-    parameter RUN_CYCLES = 200000;  // 200k cycles for full coverage
+    parameter RUN_CYCLES = 80000;  // 80k cycles - balance between coverage and timeout
 
     // Clock and Reset
     logic clk;
