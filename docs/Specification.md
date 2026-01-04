@@ -1,148 +1,133 @@
-# AXI4 Slave Design Specification
+# AXI4 Burst Boundary Assertion Generation
 
 ## Overview
 
-This document describes the AXI4 slave design and the requirements for writing SystemVerilog Assertions (SVA) to verify protocol compliance.
+This task focuses on writing SystemVerilog Assertions (SVA) to verify AXI4 burst address calculations and boundary handling. You must implement assertions that check INCR, WRAP, and FIXED burst address generation.
 
 ## Design Architecture
 
 The AXI4 slave implementation uses a 5-module architecture:
 
-\\\
+```
 axi4_slave_top
 ├── axi4_write_channel  - Write Address (AW) + Write Data (W) + Write Response (B)
 ├── axi4_read_channel   - Read Address (AR) + Read Data (R)
 ├── axi4_memory         - Backend storage (4KB addressable)
 ├── axi4_decoder (wr)   - Write address decoder
 └── axi4_decoder (rd)   - Read address decoder
-\\\
+```
 
-## Source Files
+## AXI4 Burst Types and Address Calculations
 
-| File | Description |
-|------|-------------|
-| \sources/axi4_pkg.sv\ | Package with AXI4 type definitions and parameters |
-| \sources/axi4_slave_top.sv\ | Top-level module that instantiates all submodules |
-| \sources/axi4_write_channel.sv\ | Handles AW, W, and B channels |
-| \sources/axi4_read_channel.sv\ | Handles AR and R channels |
-| \sources/axi4_memory.sv\ | Simple dual-port memory backend |
-| \sources/axi4_decoder.sv\ | Address decoder for valid address range |
+### FIXED Burst (AWBURST/ARBURST = 2'b00)
 
-## AXI4 Interface Signals
+- Address remains constant for all beats
+- Used for FIFO access
+- **Assertion Focus**: Verify address does NOT change between beats
 
-### Write Address Channel (AW)
+### INCR Burst (AWBURST/ARBURST = 2'b01)
 
-| Signal | Width | Direction | Description |
-|--------|-------|-----------|-------------|
-| AWID | 4 | Input | Write transaction ID |
-| AWADDR | 32 | Input | Write address |
-| AWLEN | 8 | Input | Burst length (0 = 1 beat, 255 = 256 beats) |
-| AWSIZE | 3 | Input | Burst size (010 = 4 bytes) |
-| AWBURST | 2 | Input | Burst type (00=FIXED, 01=INCR, 10=WRAP) |
-| AWVALID | 1 | Input | Address valid |
-| AWREADY | 1 | Output | Slave ready to accept address |
+- Address increments by transfer size for each beat
+- Most common burst type
+- **Address Formula**: `next_addr = current_addr + (1 << AWSIZE)`
+- **Assertion Focus**: Verify correct address increment
 
-### Write Data Channel (W)
+### WRAP Burst (AWBURST/ARBURST = 2'b10)
 
-| Signal | Width | Direction | Description |
-|--------|-------|-----------|-------------|
-| WDATA | 32 | Input | Write data |
-| WSTRB | 4 | Input | Byte strobes (1 bit per byte) |
-| WLAST | 1 | Input | Last beat of write burst |
-| WVALID | 1 | Input | Write data valid |
-| WREADY | 1 | Output | Slave ready to accept data |
+- Address wraps at aligned boundary
+- Only supports 2, 4, 8, or 16 beats
+- **Wrap Boundary**: `wrap_boundary = (start_addr / (len * size)) * (len * size)`
+- **Assertion Focus**: Verify wrap calculation and boundary behavior
 
-### Write Response Channel (B)
+## Burst Length and Size
 
-| Signal | Width | Direction | Description |
-|--------|-------|-----------|-------------|
-| BID | 4 | Output | Response ID (matches AWID) |
-| BRESP | 2 | Output | Write response (00=OKAY, 11=DECERR) |
-| BVALID | 1 | Output | Response valid |
-| BREADY | 1 | Input | Master ready to accept response |
+| Signal | Description |
+|--------|-------------|
+| AWLEN/ARLEN | Burst length - 1 (0 = 1 beat, 15 = 16 beats) |
+| AWSIZE/ARSIZE | Bytes per beat: 000=1B, 001=2B, 010=4B, 011=8B |
 
-### Read Address Channel (AR)
+### Key Relationships
 
-| Signal | Width | Direction | Description |
-|--------|-------|-----------|-------------|
-| ARID | 4 | Input | Read transaction ID |
-| ARADDR | 32 | Input | Read address |
-| ARLEN | 8 | Input | Burst length |
-| ARSIZE | 3 | Input | Burst size |
-| ARBURST | 2 | Input | Burst type |
-| ARVALID | 1 | Input | Address valid |
-| ARREADY | 1 | Output | Slave ready to accept address |
+- **Total Beats**: AWLEN + 1
+- **Bytes per Beat**: 1 << AWSIZE
+- **Total Bytes**: (AWLEN + 1) * (1 << AWSIZE)
 
-### Read Data Channel (R)
+## 4KB Boundary Rule
 
-| Signal | Width | Direction | Description |
-|--------|-------|-----------|-------------|
-| RID | 4 | Output | Response ID (matches ARID) |
-| RDATA | 32 | Output | Read data |
-| RRESP | 2 | Output | Read response |
-| RLAST | 1 | Output | Last beat of read burst |
-| RVALID | 1 | Output | Read data valid |
-| RREADY | 1 | Input | Master ready to accept data |
+AXI4 bursts must NOT cross a 4KB boundary (address bits [31:12] must not change).
 
-## AXI4 Protocol Rules
+**Example**: A burst starting at 0x0FFC with 4-byte transfers:
+- 0x0FFC → OK
+- 0x1000 → CROSSES 4KB BOUNDARY (violation if in same burst)
 
-### VALID/READY Handshake
+## Your Task: Write Burst Boundary Assertions
 
-The AXI4 protocol uses a VALID/READY handshake mechanism:
+Add SVA assertions to verify:
 
-1. **VALID Stability Rule**: Once VALID is asserted, it must remain HIGH until READY is also HIGH (handshake complete).
+### Required Assertions
 
-2. **No Dependency**: VALID must not depend on READY. The source can assert VALID before READY.
+1. **INCR Address Increment**
+   - Each beat address = previous + (1 << SIZE)
+   - Verify write and read channels
 
-3. **Handshake Completion**: A transfer occurs when both VALID and READY are HIGH on the rising clock edge.
+2. **FIXED Address Stability**
+   - Address must NOT change during burst
+   - Verify for both AW and AR channels
 
-### Response Codes
+3. **WRAP Boundary Calculation**
+   - Address wraps correctly at calculated boundary
+   - Verify wrap occurs at: start_aligned + (len * size)
 
-| Value | Name | Description |
-|-------|------|-------------|
-| 2'b00 | OKAY | Normal access success |
-| 2'b01 | EXOKAY | Exclusive access success |
-| 2'b10 | SLVERR | Slave error |
-| 2'b11 | DECERR | Decode error (address out of range) |
+4. **4KB Boundary Check**
+   - Burst must not cross 4KB address boundary
+   - Check address bits [31:12] remain constant
 
-### Burst Types
-
-| Value | Name | Description |
-|-------|------|-------------|
-| 2'b00 | FIXED | Fixed address for all beats |
-| 2'b01 | INCR | Incrementing address |
-| 2'b10 | WRAP | Wrapping burst |
-
-### LAST Signal Timing
-
-- **WLAST**: Must be asserted (HIGH) on the final beat of a write burst
-- **RLAST**: Must be asserted (HIGH) on the final beat of a read burst
-
-The beat count is determined by AWLEN/ARLEN + 1.
-
-## Address Range
-
-- **Valid Range**: 0x0000_0000 to 0x0000_FFFF (64KB)
-- **Out of Range**: Addresses >= 0x0001_0000 return DECERR response
-
-## Your Task: Write SVA Assertions
-
-Add SystemVerilog Assertions (SVA) to the testbench to verify AXI4 protocol compliance.
-
-Requirements:
-- Write assertions that verify the AXI4 protocol rules described above
-- Assertions should compile with Verilator and not produce false positives
-- Use proper SVA syntax with \property\, \ssert property\, and \disable iff\
-
-
+5. **Burst Length Correctness**
+   - WLAST/RLAST asserted on beat number (LEN + 1)
+   - Beat counter matches expected length
 
 ## Files to Modify
 
-- \erif/axi4_slave_tb.sv\ - Add your SVA assertions in the marked section
+- `verif/axi4_slave_tb.sv` - Add your SVA assertions in the marked section
+
+## Testbench Signals
+
+The testbench provides access to:
+
+| Signal | Description |
+|--------|-------------|
+| aclk | Clock signal |
+| aresetn | Active-low reset |
+| aw* | Write address channel signals |
+| w* | Write data channel signals |
+| ar* | Read address channel signals |
+| r* | Read data channel signals |
+| b* | Write response channel signals |
 
 ## Success Criteria
 
 Your assertions should:
 1. Compile successfully with Verilator
-2. Not fire on the correct (bug-free) design
-3. Detect protocol violations if they were to occur
+2. Not fire on the correct (bug-free) design (no false positives)
+3. Detect burst boundary violations when they occur
+4. Use proper SVA syntax with `property`, `assert property`, and `disable iff`
+
+## Example Assertion Structure
+
+```systemverilog
+// Track burst state
+logic [31:0] expected_next_addr;
+logic [7:0]  beat_count;
+logic        in_burst;
+
+// Example: INCR address check
+property p_incr_addr_increment;
+    @(posedge aclk) disable iff (!aresetn)
+    (wvalid && wready && in_burst && burst_type == INCR)
+    |-> (current_addr == expected_next_addr);
+endproperty
+
+assert property (p_incr_addr_increment)
+    else $error("INCR burst address mismatch");
+```
+
