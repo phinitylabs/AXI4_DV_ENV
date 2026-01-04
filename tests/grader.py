@@ -95,10 +95,10 @@ class AXI4TBGrader:
     # Core modules to measure coverage on
     CORE_MODULES = [
         "axi4_top",
-        "axi4_write_channel",
-        "axi4_read_channel", 
-        "axi4_memory",
-        "axi4_decoder"
+        "axi4_master",
+        "axi4_slave", 
+        "axi4_interrupt",
+        "axi4_coverage"
     ]
     
     # Functional coverpoints (embedded in simulation)
