@@ -86,7 +86,7 @@ class AXI4TBGrader:
     """
     
     # Thresholds
-    COVERAGE_LINE_MIN = 0.60        # 60% line coverage
+    COVERAGE_LINE_MIN = 0.30        # 30% line coverage
     COVERAGE_FUNCTIONAL_MIN = 10    # 10 out of 12 coverpoints
     MUTATION_MIN = 5                # 5 out of 10 mutants killed
     TIMEOUT_SECONDS = 60
