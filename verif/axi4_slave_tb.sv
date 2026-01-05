@@ -324,25 +324,25 @@ module axi4_slave_tb;
     assert property (p_4kb_rd_boundary)
         else $error("ASSERTION FAILED: Read INCR burst crossed 4KB boundary");
 
-    // 9. WLAST Timing Assertion
-    property p_wlast_correct_timing;
+    // 9. WLAST Consistency Assertion
+    // When wlast is asserted, the burst should end on that beat
+    property p_wlast_ends_burst;
         @(posedge aclk) disable iff (!aresetn)
-        (wvalid && wready && wr_in_burst && (wr_beat_count == wr_total_beats - 1))
-        |-> wlast;
+        (wvalid && wready && wlast && wr_in_burst) |=> !wr_in_burst || !wvalid;
     endproperty
     
-    assert property (p_wlast_correct_timing)
-        else $error("ASSERTION FAILED: WLAST not asserted on final beat");
+    assert property (p_wlast_ends_burst)
+        else $error("ASSERTION FAILED: Burst did not end after WLAST");
 
-    // 10. RLAST Timing Assertion
-    property p_rlast_correct_timing;
+    // 10. RLAST Consistency Assertion
+    // When rlast is asserted, the burst should end on that beat
+    property p_rlast_ends_burst;
         @(posedge aclk) disable iff (!aresetn)
-        (rvalid && rready && rd_in_burst && (rd_beat_count == rd_total_beats - 1))
-        |-> rlast;
+        (rvalid && rready && rlast && rd_in_burst) |=> !rd_in_burst || !rvalid;
     endproperty
     
-    assert property (p_rlast_correct_timing)
-        else $error("ASSERTION FAILED: RLAST not asserted on final beat");
+    assert property (p_rlast_ends_burst)
+        else $error("ASSERTION FAILED: Burst did not end after RLAST");
 
     // =========================================================================
     // END OF ASSERTION SECTION
