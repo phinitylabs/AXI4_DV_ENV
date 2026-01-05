@@ -1,8 +1,8 @@
-# AXI4 Full System Implementation Specification
+# AXI4 Interrupt Controller Verification
 
 ## Overview
 
-This is a complete AXI4 (Advanced eXtensible Interface 4) system implementation containing a master, slave, interrupt controller, and coverage collector. The design demonstrates full system-level verification of AXI4 protocol compliance.
+This task requires creating a SystemVerilog testbench with assertions to verify the interrupt controller functionality in a complete AXI4 system. The focus is on verifying interrupt request/acknowledge handshaking and proper state machine behavior.
 
 ## System Architecture
 
@@ -23,117 +23,131 @@ This is a complete AXI4 (Advanced eXtensible Interface 4) system implementation 
                     +----------+
 ```
 
-## Module Descriptions
+## Module: axi4_interrupt
 
-### 1. `axi4_top.sv` - Top Module
-Integrates all sub-modules into a complete AXI4 system.
+The interrupt controller has a simple 3-state state machine:
 
-**Instantiated Modules:**
-- `u_master` - AXI4 master (transaction generator)
-- `u_slave` - AXI4 slave (memory responder)
-- `u_interrupt` - Interrupt controller
-- `u_coverage` - Coverage collector
+| State | Description |
+|-------|-------------|
+| IDLE | Waiting for interrupt request |
+| PENDING | Interrupt request received, processing |
+| ACKNOWLEDGED | Interrupt acknowledged |
 
-### 2. `axi4_master.sv` - Master Module
-Generates AXI4 transactions including:
-- Write address (AW) channel control
-- Write data (W) channel with WLAST
-- Write response (B) channel handling
-- Read address (AR) channel control
-- Read data (R) channel with RLAST handling
+### Signals
 
-**Features:**
-- Programmable burst types (FIXED, INCR, WRAP)
-- Configurable burst lengths (1-256 beats)
-- Transaction ID tagging
-- Timeout detection
+| Signal | Direction | Description |
+|--------|-----------|-------------|
+| clk | Input | Clock signal |
+| resetn | Input | Active-low reset |
+| interrupt_req | Input | Interrupt request from master |
+| interrupt_ack | Output | Interrupt acknowledge to master |
 
-### 3. `axi4_slave.sv` - Slave Module
-Responds to AXI4 transactions with:
-- Address decoding
-- Memory read/write operations
-- Response generation (OKAY, SLVERR, DECERR)
-- Proper RLAST/WLAST handling
+### State Transitions
 
-### 4. `axi4_interrupt.sv` - Interrupt Controller
-Manages interrupt signals:
-- Transaction complete interrupts
-- Error interrupts
-- Interrupt enable/disable control
+1. **IDLE → PENDING**: When `interrupt_req` goes HIGH
+2. **PENDING → ACKNOWLEDGED**: Automatic (1 cycle delay)
+3. **ACKNOWLEDGED → IDLE**: When `interrupt_req` goes LOW
 
-### 5. `axi4_coverage.sv` - Coverage Collector
-Collects functional coverage:
-- Transaction type coverage
-- Burst type coverage
-- Address range coverage
-- Response type coverage
+### Interrupt Timing
 
-## AXI4 Protocol Summary
-
-### Five Channels
-1. **Write Address (AW)**: AWID, AWADDR, AWLEN, AWSIZE, AWBURST, AWVALID, AWREADY
-2. **Write Data (W)**: WDATA, WSTRB, WLAST, WVALID, WREADY
-3. **Write Response (B)**: BID, BRESP, BVALID, BREADY
-4. **Read Address (AR)**: ARID, ARADDR, ARLEN, ARSIZE, ARBURST, ARVALID, ARREADY
-5. **Read Data (R)**: RID, RDATA, RRESP, RLAST, RVALID, RREADY
-
-### Key Protocol Rules
-- VALID must remain stable until READY
-- WLAST must be asserted on final write beat
-- RLAST must be asserted on final read beat
-- Response codes: OKAY (00), EXOKAY (01), SLVERR (10), DECERR (11)
-- BID must match AWID, RID must match ARID
-
-## Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| ADDR_WIDTH | 32 | Address bus width |
-| DATA_WIDTH | 32 | Data bus width |
-| ID_WIDTH | 4 | Transaction ID width |
-| MEM_DEPTH | 4096 | Memory depth in words |
-
-## Address Map
-
-| Start | End | Description |
-|-------|-----|-------------|
-| 0x0000_0000 | 0x0000_FFFF | Valid memory range (64KB) |
-| 0x0001_0000+ | - | Decode error region |
-
-## Timing Diagrams
-
-### Write Transaction Flow
 ```
-Master                              Slave
-  |                                   |
-  |------ AWVALID, AWADDR ----------->|
-  |<----- AWREADY --------------------|
-  |                                   |
-  |------ WVALID, WDATA, WLAST ------>|
-  |<----- WREADY ---------------------|
-  |                                   |
-  |<----- BVALID, BRESP --------------|
-  |------ BREADY -------------------->|
+           ____________________
+interrupt_req  |                  |_______
+                    __________
+interrupt_ack  ____|          |___________
+
+State:     IDLE  PENDING  ACKNOWLEDGED  IDLE
 ```
 
-### Read Transaction Flow
-```
-Master                              Slave
-  |                                   |
-  |------ ARVALID, ARADDR ----------->|
-  |<----- ARREADY --------------------|
-  |                                   |
-  |<----- RVALID, RDATA, RLAST -------|
-  |------ RREADY -------------------->|
+## Your Task
+
+Create a comprehensive testbench (`verif/axi4_top_tb.sv`) and C++ wrapper (`verif/sim_main.cpp`) that:
+
+### 1. Testbench Requirements
+
+- Clock generation (10ns period)
+- Reset sequence
+- DUT instantiation (`axi4_top`)
+- Test stimulus generation
+
+### 2. Interrupt Test Scenarios
+
+Write tests that verify:
+- **Basic handshake**: Assert `interrupt_req`, verify `interrupt_ack` timing
+- **Hold requirement**: `interrupt_ack` stays HIGH while `interrupt_req` is HIGH
+- **De-assertion**: `interrupt_ack` goes LOW after `interrupt_req` goes LOW
+- **Multiple interrupts**: Successive interrupt cycles work correctly
+- **Reset behavior**: State machine resets properly
+
+### 3. SVA Assertions
+
+Add assertions to verify:
+- `interrupt_ack` only asserts after `interrupt_req`
+- `interrupt_ack` remains stable during acknowledge state
+- State machine does not enter invalid states
+- Timing between request and acknowledge is correct
+
+## Files to Create/Modify
+
+- `verif/axi4_top_tb.sv` - Main testbench with interrupt tests and assertions
+- `verif/sim_main.cpp` - Verilator C++ wrapper
+
+## Quality Requirements
+
+**Important**: Do NOT use hierarchical references to access internal DUT signals (e.g., `dut.u_interrupt.state`). Only use the top-level ports.
+
+## Example Testbench Structure
+
+```systemverilog
+module axi4_top_tb;
+    // Clock and reset
+    logic clk;
+    logic resetn;
+    
+    // Interrupt interface
+    logic interrupt_req;
+    logic interrupt_ack;
+    
+    // DUT instantiation
+    axi4_top dut (
+        .clk(clk),
+        .resetn(resetn),
+        // ... other ports ...
+        .interrupt_req(interrupt_req),
+        .interrupt_ack(interrupt_ack)
+    );
+    
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk;
+    end
+    
+    // Test sequence
+    initial begin
+        // Reset
+        resetn = 0;
+        interrupt_req = 0;
+        repeat(10) @(posedge clk);
+        resetn = 1;
+        
+        // Test interrupt handshake
+        // ... your test code ...
+        
+        $finish;
+    end
+    
+    // SVA Assertions
+    // assert property (...);
+endmodule
 ```
 
-## Testbench Requirements
+## Success Criteria
 
 Your testbench should:
-1. Instantiate `axi4_top` as DUT
-2. Provide clock and reset signals
-3. Generate various transaction patterns
-4. Verify data integrity (write-read consistency)
-5. Test error conditions (out-of-range addresses)
-6. Cover burst transactions (FIXED, INCR, WRAP)
-7. Include timeout protection
+1. Compile successfully with Verilator
+2. Pass all tests on the correct design
+3. Detect bugs in faulty interrupt implementations
+4. Include meaningful SVA assertions
+5. Avoid hierarchical references (quality check)
+
