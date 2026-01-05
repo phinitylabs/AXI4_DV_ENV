@@ -86,7 +86,7 @@ module axi4_top_tb;
     // 2. Ack timing: interrupt_ack should assert within 3 cycles of interrupt_req
     property p_ack_timing;
         @(posedge clk) disable iff (!resetn)
-        $rose(interrupt_req) |-> ##[1:3] interrupt_ack;
+        $rose(interrupt_req) |-> ##2 interrupt_ack;
     endproperty
     
     assert property (p_ack_timing)
@@ -104,7 +104,7 @@ module axi4_top_tb;
     // 4. Ack deassert: interrupt_ack should deassert after interrupt_req deasserts
     property p_ack_deassert;
         @(posedge clk) disable iff (!resetn)
-        $fell(interrupt_req) && interrupt_ack |-> ##[1:3] !interrupt_ack;
+        $fell(interrupt_req) && interrupt_ack |-> ##2 !interrupt_ack;
     endproperty
     
     assert property (p_ack_deassert)
