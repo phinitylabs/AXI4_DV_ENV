@@ -48,12 +48,18 @@ module axi4_top_tb;
     logic [7:0] cycles_since_req;
     logic req_was_high;
     
+    // Track deassert timing for Verilator-compatible assertions
+    logic [7:0] cycles_since_deassert;
+    logic deassert_pending;
+    
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             interrupt_req_prev <= 1'b0;
             interrupt_ack_prev <= 1'b0;
             cycles_since_req <= '0;
             req_was_high <= 1'b0;
+            cycles_since_deassert <= '0;
+            deassert_pending <= 1'b0;
         end else begin
             interrupt_req_prev <= interrupt_req;
             interrupt_ack_prev <= interrupt_ack;
@@ -65,8 +71,17 @@ module axi4_top_tb;
                 cycles_since_req <= cycles_since_req + 1;
             end
             
-            if (!interrupt_req && interrupt_req_prev)
+            // Track when req deasserts while ack is high
+            if (!interrupt_req && interrupt_req_prev && interrupt_ack) begin
+                cycles_since_deassert <= '0;
+                deassert_pending <= 1'b1;
                 req_was_high <= 1'b0;
+            end else if (deassert_pending && cycles_since_deassert < 255) begin
+                cycles_since_deassert <= cycles_since_deassert + 1;
+                if (!interrupt_ack) deassert_pending <= 1'b0;
+            end else if (!interrupt_req && interrupt_req_prev) begin
+                req_was_high <= 1'b0;
+            end
         end
     end
 
@@ -83,14 +98,15 @@ module axi4_top_tb;
     assert property (p_ack_requires_request)
         else $error("ASSERTION FAILED: interrupt_ack asserted without prior interrupt_req");
 
-    // 2. Ack timing: interrupt_ack should assert within 3 cycles of interrupt_req
+    // 2. Ack timing: interrupt_ack should assert within 2 cycles of interrupt_req
+    // Uses cycle counter instead of ## delay for simulator compatibility
     property p_ack_timing;
         @(posedge clk) disable iff (!resetn)
-        $rose(interrupt_req) |-> ##2 interrupt_ack;
+        (req_was_high && cycles_since_req == 2) |-> interrupt_ack;
     endproperty
     
     assert property (p_ack_timing)
-        else $error("ASSERTION FAILED: interrupt_ack not asserted within 3 cycles of request");
+        else $error("ASSERTION FAILED: interrupt_ack not asserted within 2 cycles of request");
 
     // 3. Ack stability: interrupt_ack stays high while interrupt_req is high (after ack)
     property p_ack_stable_while_req;
@@ -101,10 +117,11 @@ module axi4_top_tb;
     assert property (p_ack_stable_while_req)
         else $error("ASSERTION FAILED: interrupt_ack unstable while interrupt_req high");
 
-    // 4. Ack deassert: interrupt_ack should deassert after interrupt_req deasserts
+    // 4. Ack deassert: interrupt_ack should deassert 2 cycles after interrupt_req deasserts
+    // Uses cycle counter instead of ## delay for simulator compatibility
     property p_ack_deassert;
         @(posedge clk) disable iff (!resetn)
-        $fell(interrupt_req) && interrupt_ack |-> ##2 !interrupt_ack;
+        (deassert_pending && cycles_since_deassert == 2) |-> !interrupt_ack;
     endproperty
     
     assert property (p_ack_deassert)
