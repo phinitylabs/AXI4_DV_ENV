@@ -118,6 +118,17 @@ class TestAXI4InterruptTBGeneration:
         if not result.phase2_negative_passed:
             pytest.fail(f"Errors on golden DUT: {result.error_message}")
         
+        # Require assertions - this is a hard prerequisite
+        if result.phase5_quality and not result.phase5_quality.has_assertions:
+            pytest.fail("No SVA assertions found in testbench - assertions are required")
+        
+        # Require at least 1 mutant killed - ensures assertions actually detect bugs
+        if result.phase4_mutation and result.phase4_mutation.killed_mutants < 1:
+            pytest.fail(
+                f"No mutants killed ({result.phase4_mutation.killed_mutants}/{result.phase4_mutation.total_mutants}). "
+                "Assertions must detect at least one bug."
+            )
+        
         # Check total score against threshold
         if total_score < PASS_THRESHOLD:
             pytest.fail(
