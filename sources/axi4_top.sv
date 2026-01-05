@@ -3,7 +3,10 @@
 
 module axi4_top (
     input logic clk,
-    input logic resetn
+    input logic resetn,
+    // Interrupt interface
+    input logic interrupt_req,
+    output logic interrupt_ack
 );
 
     // AXI4 Write Address Channel Signals
@@ -41,9 +44,7 @@ module axi4_top (
     logic         axi_rvalid;
     logic         axi_rready;
     
-    // Interrupt signals
-    logic         interrupt_req;
-    logic         interrupt_ack;
+    // Interrupt signals (now ports, not internal signals)
 
     // AXI4 Master Instance
     axi4_master master (
