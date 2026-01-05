@@ -478,7 +478,7 @@ module axi4_slave_tb;
         logic [1:0] resp;
         test_count++;
         $display("\n[TEST %0d] FIXED Burst", test_count);
-        axi_write(32'h0000_3000, 32'hFIXD_0000, 0, 3, BURST_FIXED, 4'b1111, resp);
+        axi_write(32'h0000_3000, 32'hF12D_0000, 0, 3, BURST_FIXED, 4'b1111, resp);
         axi_read(32'h0000_3000, 0, 3, BURST_FIXED, rd_data, resp);
         pass_count++; $display("  PASS");
     endtask
@@ -488,7 +488,7 @@ module axi4_slave_tb;
         logic [1:0] resp;
         test_count++;
         $display("\n[TEST %0d] WRAP Burst (4 beats)", test_count);
-        axi_write(32'h0000_4008, 32'hWRAP_0000, 0, 3, BURST_WRAP, 4'b1111, resp);
+        axi_write(32'h0000_4008, 32'h42A9_0000, 0, 3, BURST_WRAP, 4'b1111, resp);
         axi_read(32'h0000_4008, 0, 3, BURST_WRAP, rd_data, resp);
         pass_count++; $display("  PASS");
     endtask
