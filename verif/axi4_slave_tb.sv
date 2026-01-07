@@ -291,41 +291,46 @@ module axi4_slave_tb;
     end
 
     // =========================================================================
-    // ADD YOUR BURST BOUNDARY ASSERTIONS HERE
+    // ADD YOUR BURST BOUNDARY ASSERTIONS HERE (Simplified - just 2 types needed)
     // =========================================================================
     //
-    // Required assertions (use the tracking signals above, NOT dut.* signals):
+    // TASK: Write at least 2 assertions using the tracking signals above.
+    //       DO NOT use hierarchical references like dut.u_write_channel.*
+    //
+    // Required assertions (pick 2 or more):
     //
     // 1. INCR address increment verification
-    //    - Check that wr_current_addr increments correctly for INCR bursts
-    //    - Check that rd_current_addr increments correctly for INCR bursts
+    //    - Check that address increments correctly for INCR bursts
     //
-    // 2. FIXED address stability verification  
-    //    - Check that address stays at wr_start_addr for FIXED bursts
-    //    - Check that address stays at rd_start_addr for FIXED bursts
-    //
-    // 3. WRAP boundary calculation verification
-    //    - Check that address wraps correctly at wr_wrap_boundary
-    //    - Check that address wraps correctly at rd_wrap_boundary
-    //
-    // 4. 4KB boundary check
-    //    - Verify bursts don't cross 4KB boundaries (start_addr[31:12] == end_addr[31:12])
-    //
-    // 5. Burst length (WLAST/RLAST) correctness
-    //    - Verify wlast asserts when wr_beat_count == wr_total_beats - 1
-    //    - Verify rlast asserts when rd_beat_count == rd_total_beats - 1
-    //
-    // Example assertion structure:
-    //
-    // property p_example_check;
-    //     @(posedge aclk) disable iff (!aresetn)
-    //     (wr_in_burst && wvalid && wready && wr_burst_type == BURST_INCR) |->
-    //     (wr_current_addr == wr_prev_addr + wr_addr_incr);
-    // endproperty
-    // assert property (p_example_check) else $error("Example check failed");
+    // 2. WLAST/RLAST timing correctness  
+    //    - Check that wlast/rlast signals burst end correctly
     //
     // =========================================================================
+    // EXAMPLE ASSERTION (already provided - you need to add at least 1 more):
+    // =========================================================================
+    
+    // Example: INCR Write Address Increment Check
+    property p_incr_wr_addr;
+        @(posedge aclk) disable iff (!aresetn)
+        (wr_in_burst && wvalid && wready && wr_burst_type == BURST_INCR && wr_beat_count > 0)
+        |-> (wr_current_addr == wr_prev_addr + wr_addr_incr);
+    endproperty
+    assert property (p_incr_wr_addr) 
+        else $error("ASSERTION FAILED: INCR write address increment mismatch");
 
+    // =========================================================================
+    // ADD YOUR ASSERTIONS BELOW (at least 1 more required):
+    // 
+    // Suggested: Add WLAST timing check or INCR read address check
+    // 
+    // Example pattern for WLAST:
+    //   property p_wlast_timing;
+    //       @(posedge aclk) disable iff (!aresetn)
+    //       (wr_in_burst && wvalid && wready && wlast) |=> (!wr_in_burst);
+    //   endproperty
+    //   assert property (p_wlast_timing) else $error("WLAST timing error");
+    //
+    // =========================================================================
 
 
     // =========================================================================
