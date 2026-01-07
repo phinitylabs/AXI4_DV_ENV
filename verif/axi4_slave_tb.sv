@@ -1,7 +1,28 @@
 // =============================================================================
-// AXI4 Burst Boundary Assertion Testbench - GOLDEN Solution
-// Contains SVA assertions for burst address calculation verification
+// AXI4 Burst Boundary Assertion Testbench - Starter Template
+// Task: Add SVA assertions for burst address calculation verification
 // =============================================================================
+//
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// !! CRITICAL WARNING - READ BEFORE WRITING ASSERTIONS !!
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// !!
+// !! DO NOT use hierarchical references to DUT internal signals!
+// !!
+// !! WRONG (will result in 0 points):
+// !!   dut.u_write_channel.current_addr
+// !!   dut.u_read_channel.beat_count
+// !!   dut.u_write_channel.burst_type
+// !!   or any dut.* internal signal access
+// !!
+// !! CORRECT: Use ONLY the testbench tracking signals provided below:
+// !!   wr_in_burst, wr_current_addr, wr_beat_count, etc.
+// !!   rd_in_burst, rd_current_addr, rd_beat_count, etc.
+// !!
+// !! The tracking logic is already implemented for you.
+// !! Your job is to write assertions using these signals.
+// !!
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 `timescale 1ns/1ps
 
@@ -113,10 +134,11 @@ module axi4_slave_tb;
     );
 
     // =========================================================================
-    // BURST STATE TRACKING
+    // BURST STATE TRACKING - ALREADY IMPLEMENTED FOR YOU
+    // Use these signals in your assertions (NOT dut.* internal signals!)
     // =========================================================================
     
-    // Write burst tracking
+    // Write burst tracking signals
     logic        wr_in_burst;
     logic [31:0] wr_start_addr;
     logic [31:0] wr_current_addr;
@@ -125,11 +147,11 @@ module axi4_slave_tb;
     logic [7:0]  wr_total_beats;
     logic [2:0]  wr_burst_size;
     logic [1:0]  wr_burst_type;
-    logic [31:0] wr_addr_incr;
     logic [31:0] wr_wrap_boundary;
     logic [31:0] wr_wrap_size;
+    logic [31:0] wr_addr_incr;
     
-    // Read burst tracking
+    // Read burst tracking signals
     logic        rd_in_burst;
     logic [31:0] rd_start_addr;
     logic [31:0] rd_current_addr;
@@ -138,116 +160,144 @@ module axi4_slave_tb;
     logic [7:0]  rd_total_beats;
     logic [2:0]  rd_burst_size;
     logic [1:0]  rd_burst_type;
-    logic [31:0] rd_addr_incr;
     logic [31:0] rd_wrap_boundary;
     logic [31:0] rd_wrap_size;
+    logic [31:0] rd_addr_incr;
 
-    // Write burst state machine
+    // =========================================================================
+    // WRITE BURST TRACKING LOGIC (Pre-implemented - do not modify)
+    // =========================================================================
     always_ff @(posedge aclk or negedge aresetn) begin
         if (!aresetn) begin
-            wr_in_burst <= 1'b0;
-            wr_start_addr <= '0;
+            wr_in_burst     <= 1'b0;
+            wr_start_addr   <= '0;
             wr_current_addr <= '0;
-            wr_prev_addr <= '0;
-            wr_beat_count <= '0;
-            wr_total_beats <= '0;
-            wr_burst_size <= '0;
-            wr_burst_type <= '0;
-            wr_addr_incr <= '0;
+            wr_prev_addr    <= '0;
+            wr_beat_count   <= '0;
+            wr_total_beats  <= '0;
+            wr_burst_size   <= '0;
+            wr_burst_type   <= '0;
             wr_wrap_boundary <= '0;
-            wr_wrap_size <= '0;
+            wr_wrap_size    <= '0;
+            wr_addr_incr    <= '0;
         end else begin
+            // Capture burst parameters on address handshake
             if (awvalid && awready) begin
-                wr_in_burst <= 1'b1;
-                wr_start_addr <= awaddr;
+                wr_in_burst     <= 1'b1;
+                wr_start_addr   <= awaddr;
                 wr_current_addr <= awaddr;
-                wr_prev_addr <= awaddr;
-                wr_beat_count <= '0;
-                wr_total_beats <= awlen + 1;
-                wr_burst_size <= awsize;
-                wr_burst_type <= awburst;
-                wr_addr_incr <= (1 << awsize);
-                wr_wrap_size <= (awlen + 1) << awsize;
+                wr_prev_addr    <= awaddr;
+                wr_beat_count   <= '0;
+                wr_total_beats  <= awlen + 1;
+                wr_burst_size   <= awsize;
+                wr_burst_type   <= awburst;
+                wr_addr_incr    <= (1 << awsize);
+                wr_wrap_size    <= (awlen + 1) << awsize;
                 wr_wrap_boundary <= awaddr & ~(((awlen + 1) << awsize) - 1);
-            end else if (wvalid && wready && wr_in_burst) begin
-                wr_prev_addr <= wr_current_addr;
+            end
+            // Update tracking on each data beat
+            else if (wr_in_burst && wvalid && wready) begin
                 wr_beat_count <= wr_beat_count + 1;
+                wr_prev_addr  <= wr_current_addr;
                 
+                // Calculate next address based on burst type
                 case (wr_burst_type)
-                    BURST_FIXED: wr_current_addr <= wr_current_addr;
-                    BURST_INCR:  wr_current_addr <= wr_current_addr + wr_addr_incr;
+                    BURST_FIXED: begin
+                        wr_current_addr <= wr_start_addr; // Address stays same
+                    end
+                    BURST_INCR: begin
+                        wr_current_addr <= wr_current_addr + wr_addr_incr;
+                    end
                     BURST_WRAP: begin
                         if ((wr_current_addr + wr_addr_incr) >= (wr_wrap_boundary + wr_wrap_size))
                             wr_current_addr <= wr_wrap_boundary;
                         else
                             wr_current_addr <= wr_current_addr + wr_addr_incr;
                     end
-                    default: wr_current_addr <= wr_current_addr + wr_addr_incr;
+                    default: begin
+                        wr_current_addr <= wr_current_addr + wr_addr_incr;
+                    end
                 endcase
                 
-                if (wlast)
+                // End burst on wlast
+                if (wlast) begin
                     wr_in_burst <= 1'b0;
+                end
             end
         end
     end
 
-    // Read burst state machine  
+    // =========================================================================
+    // READ BURST TRACKING LOGIC (Pre-implemented - do not modify)
+    // =========================================================================
     always_ff @(posedge aclk or negedge aresetn) begin
         if (!aresetn) begin
-            rd_in_burst <= 1'b0;
-            rd_start_addr <= '0;
+            rd_in_burst     <= 1'b0;
+            rd_start_addr   <= '0;
             rd_current_addr <= '0;
-            rd_prev_addr <= '0;
-            rd_beat_count <= '0;
-            rd_total_beats <= '0;
-            rd_burst_size <= '0;
-            rd_burst_type <= '0;
-            rd_addr_incr <= '0;
+            rd_prev_addr    <= '0;
+            rd_beat_count   <= '0;
+            rd_total_beats  <= '0;
+            rd_burst_size   <= '0;
+            rd_burst_type   <= '0;
             rd_wrap_boundary <= '0;
-            rd_wrap_size <= '0;
+            rd_wrap_size    <= '0;
+            rd_addr_incr    <= '0;
         end else begin
+            // Capture burst parameters on address handshake
             if (arvalid && arready) begin
-                rd_in_burst <= 1'b1;
-                rd_start_addr <= araddr;
+                rd_in_burst     <= 1'b1;
+                rd_start_addr   <= araddr;
                 rd_current_addr <= araddr;
-                rd_prev_addr <= araddr;
-                rd_beat_count <= '0;
-                rd_total_beats <= arlen + 1;
-                rd_burst_size <= arsize;
-                rd_burst_type <= arburst;
-                rd_addr_incr <= (1 << arsize);
-                rd_wrap_size <= (arlen + 1) << arsize;
+                rd_prev_addr    <= araddr;
+                rd_beat_count   <= '0;
+                rd_total_beats  <= arlen + 1;
+                rd_burst_size   <= arsize;
+                rd_burst_type   <= arburst;
+                rd_addr_incr    <= (1 << arsize);
+                rd_wrap_size    <= (arlen + 1) << arsize;
                 rd_wrap_boundary <= araddr & ~(((arlen + 1) << arsize) - 1);
-            end else if (rvalid && rready && rd_in_burst) begin
-                rd_prev_addr <= rd_current_addr;
+            end
+            // Update tracking on each data beat
+            else if (rd_in_burst && rvalid && rready) begin
                 rd_beat_count <= rd_beat_count + 1;
+                rd_prev_addr  <= rd_current_addr;
                 
+                // Calculate next address based on burst type
                 case (rd_burst_type)
-                    BURST_FIXED: rd_current_addr <= rd_current_addr;
-                    BURST_INCR:  rd_current_addr <= rd_current_addr + rd_addr_incr;
+                    BURST_FIXED: begin
+                        rd_current_addr <= rd_start_addr; // Address stays same
+                    end
+                    BURST_INCR: begin
+                        rd_current_addr <= rd_current_addr + rd_addr_incr;
+                    end
                     BURST_WRAP: begin
                         if ((rd_current_addr + rd_addr_incr) >= (rd_wrap_boundary + rd_wrap_size))
                             rd_current_addr <= rd_wrap_boundary;
                         else
                             rd_current_addr <= rd_current_addr + rd_addr_incr;
                     end
-                    default: rd_current_addr <= rd_current_addr + rd_addr_incr;
+                    default: begin
+                        rd_current_addr <= rd_current_addr + rd_addr_incr;
+                    end
                 endcase
                 
-                if (rlast)
+                // End burst on rlast
+                if (rlast) begin
                     rd_in_burst <= 1'b0;
+                end
             end
         end
     end
 
     // =========================================================================
-    // BURST BOUNDARY ASSERTIONS
+    // BURST BOUNDARY ASSERTIONS - GOLDEN SOLUTION
     // =========================================================================
 
     // 1. INCR Address Increment Assertion (Write)
     property p_incr_wr_addr_increment;
         @(posedge aclk) disable iff (!aresetn)
-        (wvalid && wready && wr_in_burst && wr_burst_type == BURST_INCR && wr_beat_count > 0)
+        (wr_in_burst && wvalid && wready && wr_burst_type == BURST_INCR && wr_beat_count > 0)
         |-> (wr_current_addr == wr_prev_addr + wr_addr_incr);
     endproperty
     
@@ -257,7 +307,7 @@ module axi4_slave_tb;
     // 2. INCR Address Increment Assertion (Read)
     property p_incr_rd_addr_increment;
         @(posedge aclk) disable iff (!aresetn)
-        (rvalid && rready && rd_in_burst && rd_burst_type == BURST_INCR && rd_beat_count > 0)
+        (rd_in_burst && rvalid && rready && rd_burst_type == BURST_INCR && rd_beat_count > 0)
         |-> (rd_current_addr == rd_prev_addr + rd_addr_incr);
     endproperty
     
@@ -267,7 +317,7 @@ module axi4_slave_tb;
     // 3. FIXED Address Stability Assertion (Write)
     property p_fixed_wr_addr_stable;
         @(posedge aclk) disable iff (!aresetn)
-        (wvalid && wready && wr_in_burst && wr_burst_type == BURST_FIXED && wr_beat_count > 0)
+        (wr_in_burst && wvalid && wready && wr_burst_type == BURST_FIXED)
         |-> (wr_current_addr == wr_start_addr);
     endproperty
     
@@ -277,72 +327,72 @@ module axi4_slave_tb;
     // 4. FIXED Address Stability Assertion (Read)
     property p_fixed_rd_addr_stable;
         @(posedge aclk) disable iff (!aresetn)
-        (rvalid && rready && rd_in_burst && rd_burst_type == BURST_FIXED && rd_beat_count > 0)
+        (rd_in_burst && rvalid && rready && rd_burst_type == BURST_FIXED)
         |-> (rd_current_addr == rd_start_addr);
     endproperty
     
     assert property (p_fixed_rd_addr_stable)
         else $error("ASSERTION FAILED: FIXED read burst address changed");
 
-    // 5. WRAP Boundary Check (Write)
+    // 5. WRAP Boundary Assertion (Write)
     property p_wrap_wr_boundary;
         @(posedge aclk) disable iff (!aresetn)
-        (wvalid && wready && wr_in_burst && wr_burst_type == BURST_WRAP)
+        (wr_in_burst && wvalid && wready && wr_burst_type == BURST_WRAP)
         |-> (wr_current_addr >= wr_wrap_boundary && wr_current_addr < wr_wrap_boundary + wr_wrap_size);
     endproperty
     
     assert property (p_wrap_wr_boundary)
-        else $error("ASSERTION FAILED: WRAP write burst address outside boundary");
+        else $error("ASSERTION FAILED: WRAP write address outside boundary");
 
-    // 6. WRAP Boundary Check (Read)
+    // 6. WRAP Boundary Assertion (Read)
     property p_wrap_rd_boundary;
         @(posedge aclk) disable iff (!aresetn)
-        (rvalid && rready && rd_in_burst && rd_burst_type == BURST_WRAP)
+        (rd_in_burst && rvalid && rready && rd_burst_type == BURST_WRAP)
         |-> (rd_current_addr >= rd_wrap_boundary && rd_current_addr < rd_wrap_boundary + rd_wrap_size);
     endproperty
     
     assert property (p_wrap_rd_boundary)
-        else $error("ASSERTION FAILED: WRAP read burst address outside boundary");
+        else $error("ASSERTION FAILED: WRAP read address outside boundary");
 
-    // 7. 4KB Boundary Check (Write INCR)
+    // 7. 4KB Boundary Check (Write)
     property p_4kb_wr_boundary;
         @(posedge aclk) disable iff (!aresetn)
-        (wvalid && wready && wr_in_burst && wr_burst_type == BURST_INCR)
-        |-> (wr_current_addr[31:12] == wr_start_addr[31:12]);
+        (awvalid && awready)
+        |-> (awaddr[31:12] == ((awaddr + ((awlen + 1) << awsize) - 1))[31:12]);
     endproperty
     
     assert property (p_4kb_wr_boundary)
-        else $error("ASSERTION FAILED: Write INCR burst crossed 4KB boundary");
+        else $error("ASSERTION FAILED: Write burst crosses 4KB boundary");
 
-    // 8. 4KB Boundary Check (Read INCR)
+    // 8. 4KB Boundary Check (Read)
     property p_4kb_rd_boundary;
         @(posedge aclk) disable iff (!aresetn)
-        (rvalid && rready && rd_in_burst && rd_burst_type == BURST_INCR)
-        |-> (rd_current_addr[31:12] == rd_start_addr[31:12]);
+        (arvalid && arready)
+        |-> (araddr[31:12] == ((araddr + ((arlen + 1) << arsize) - 1))[31:12]);
     endproperty
     
     assert property (p_4kb_rd_boundary)
-        else $error("ASSERTION FAILED: Read INCR burst crossed 4KB boundary");
+        else $error("ASSERTION FAILED: Read burst crosses 4KB boundary");
 
-    // 9. WLAST Consistency Assertion
-    // When wlast is asserted, the burst should end on that beat
+    // 9. WLAST Ends Burst
     property p_wlast_ends_burst;
         @(posedge aclk) disable iff (!aresetn)
-        (wvalid && wready && wlast && wr_in_burst) |=> !wr_in_burst || !wvalid;
+        (wr_in_burst && wvalid && wready && wlast)
+        |=> (!wr_in_burst);
     endproperty
     
     assert property (p_wlast_ends_burst)
-        else $error("ASSERTION FAILED: Burst did not end after WLAST");
+        else $error("ASSERTION FAILED: WLAST did not end burst");
 
-    // 10. RLAST Consistency Assertion
-    // When rlast is asserted, the burst should end on that beat
+    // 10. RLAST Ends Burst
     property p_rlast_ends_burst;
         @(posedge aclk) disable iff (!aresetn)
-        (rvalid && rready && rlast && rd_in_burst) |=> !rd_in_burst || !rvalid;
+        (rd_in_burst && rvalid && rready && rlast)
+        |=> (!rd_in_burst);
     endproperty
     
     assert property (p_rlast_ends_burst)
-        else $error("ASSERTION FAILED: Burst did not end after RLAST");
+        else $error("ASSERTION FAILED: RLAST did not end burst");
 
     // =========================================================================
     // END OF ASSERTION SECTION
@@ -450,6 +500,17 @@ module axi4_slave_tb;
         @(posedge aclk);
     endtask
 
+    // Simple Write/Read Tasks
+    task automatic axi_write_simple(input logic [ADDR_WIDTH-1:0] addr, input logic [DATA_WIDTH-1:0] data);
+        logic [1:0] resp;
+        axi_write(addr, data, 0, 0, BURST_INCR, 4'b1111, resp);
+    endtask
+
+    task automatic axi_read_simple(input logic [ADDR_WIDTH-1:0] addr, output logic [DATA_WIDTH-1:0] data);
+        logic [1:0] resp;
+        axi_read(addr, 0, 0, BURST_INCR, data, resp);
+    endtask
+
     // Test Cases
     task automatic test_single_write_read();
         logic [DATA_WIDTH-1:0] wr_data, rd_data;
@@ -529,4 +590,3 @@ module axi4_slave_tb;
     end
 
 endmodule
-
