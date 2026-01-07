@@ -533,31 +533,83 @@ module axi4_slave_tb;
     task automatic test_incr_burst();
         logic [DATA_WIDTH-1:0] rd_data;
         logic [1:0] resp;
+        logic [31:0] expected_addr;
+        int errors;
         test_count++;
-        $display("\n[TEST %0d] INCR Burst (4 beats)", test_count);
+        errors = 0;
+        $display("\n[TEST %0d] INCR Burst (4 beats) with data integrity verification", test_count);
+        // Write unique data per beat: 0xBEEF_0000, 0xBEEF_0001, 0xBEEF_0002, 0xBEEF_0003
         axi_write(32'h0000_2000, 32'hBEEF_0000, 0, 3, BURST_INCR, 4'b1111, resp);
-        axi_read(32'h0000_2000, 0, 3, BURST_INCR, rd_data, resp);
-        pass_count++; $display("  PASS");
+        // Verify each beat was written to the correct address by reading individually
+        for (int i = 0; i < 4; i++) begin
+            expected_addr = 32'h0000_2000 + (i * 4);  // INCR increments by transfer size
+            axi_read_simple(expected_addr, rd_data);
+            if (rd_data !== (32'hBEEF_0000 + i)) begin
+                $error("ASSERTION FAILED: INCR burst data mismatch at addr=%h, expected=%h, got=%h", 
+                       expected_addr, 32'hBEEF_0000 + i, rd_data);
+                errors++;
+            end
+        end
+        if (errors == 0) begin pass_count++; $display("  PASS"); end
+        else begin fail_count++; $display("  FAIL"); end
     endtask
 
     task automatic test_fixed_burst();
         logic [DATA_WIDTH-1:0] rd_data;
         logic [1:0] resp;
         test_count++;
-        $display("\n[TEST %0d] FIXED Burst", test_count);
+        $display("\n[TEST %0d] FIXED Burst (address should stay same)", test_count);
+        // For FIXED burst, all beats write to the same address
+        // Only the last value should be retained
         axi_write(32'h0000_3000, 32'hF12D_0000, 0, 3, BURST_FIXED, 4'b1111, resp);
-        axi_read(32'h0000_3000, 0, 3, BURST_FIXED, rd_data, resp);
-        pass_count++; $display("  PASS");
+        axi_read_simple(32'h0000_3000, rd_data);
+        // Last beat value is base + 3 = 0xF12D_0003
+        if (rd_data !== 32'hF12D_0003) begin
+            $error("ASSERTION FAILED: FIXED burst - expected last written value=%h, got=%h", 
+                   32'hF12D_0003, rd_data);
+            fail_count++; $display("  FAIL");
+        end else begin
+            pass_count++; $display("  PASS");
+        end
     endtask
 
     task automatic test_wrap_burst();
         logic [DATA_WIDTH-1:0] rd_data;
         logic [1:0] resp;
+        logic [31:0] wrap_boundary;
+        logic [31:0] wrap_size;
+        logic [31:0] expected_addr;
+        logic [31:0] current_addr;
+        int errors;
         test_count++;
-        $display("\n[TEST %0d] WRAP Burst (4 beats)", test_count);
-        axi_write(32'h0000_4008, 32'h42A9_0000, 0, 3, BURST_WRAP, 4'b1111, resp);
-        axi_read(32'h0000_4008, 0, 3, BURST_WRAP, rd_data, resp);
-        pass_count++; $display("  PASS");
+        errors = 0;
+        $display("\n[TEST %0d] WRAP Burst (4 beats) with wrap boundary verification", test_count);
+        // WRAP burst starting at offset 0x4008 with len=3 (4 beats), size=4 bytes
+        // Wrap boundary = 0x4000 (aligned to 16-byte wrap size)
+        // Wrap size = 4 * 4 = 16 bytes
+        // Addresses: 0x4008, 0x400C, 0x4000 (wrap!), 0x4004
+        axi_write(32'h0000_4008, 32'hABCD_0000, 0, 3, BURST_WRAP, 4'b1111, resp);
+        
+        // Verify data at expected wrap addresses
+        wrap_boundary = 32'h0000_4000;
+        wrap_size = 16;
+        current_addr = 32'h0000_4008;
+        
+        for (int i = 0; i < 4; i++) begin
+            axi_read_simple(current_addr, rd_data);
+            if (rd_data !== (32'hABCD_0000 + i)) begin
+                $error("ASSERTION FAILED: WRAP burst data mismatch at addr=%h, expected=%h, got=%h", 
+                       current_addr, 32'hABCD_0000 + i, rd_data);
+                errors++;
+            end
+            // Calculate next address with wrap
+            if ((current_addr + 4) >= (wrap_boundary + wrap_size))
+                current_addr = wrap_boundary;
+            else
+                current_addr = current_addr + 4;
+        end
+        if (errors == 0) begin pass_count++; $display("  PASS"); end
+        else begin fail_count++; $display("  FAIL"); end
     endtask
 
     task automatic test_decode_error();
