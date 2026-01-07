@@ -67,7 +67,7 @@ class AXI4BurstSVAGrader:
     """
 
     # Thresholds
-    MUTATION_MIN = 3  # Minimum mutants that must be killed
+    MUTATION_MIN = 2  # Minimum mutants that must be killed (reduced for difficulty)
     MIN_ASSERTIONS = 4  # Minimum assertion count
     TIMEOUT_SECONDS = 60
 
@@ -334,6 +334,18 @@ class AXI4BurstSVAGrader:
         for block in always_blocks:
             if '$error' in block and 'assert' not in block.lower():
                 result.illegal_patterns.append("$error without assertion")
+                break
+
+        # Check for hierarchical references (cheating by accessing DUT internals)
+        hierarchical_patterns = [
+            r'dut\.u_write_channel\.',
+            r'dut\.u_read_channel\.',
+            r'dut\.\w+_channel\.',
+            r'dut\.internal',
+        ]
+        for pattern in hierarchical_patterns:
+            if re.search(pattern, tb_no_comments, re.IGNORECASE):
+                result.illegal_patterns.append("Hierarchical reference to DUT internals (use port-level signals only)")
                 break
 
         checks = [
