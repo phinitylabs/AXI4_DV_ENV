@@ -291,18 +291,45 @@ module axi4_slave_tb;
     end
 
     // =========================================================================
-    // BURST BOUNDARY ASSERTIONS - GOLDEN SOLUTION
+    // ADD YOUR BURST BOUNDARY ASSERTIONS HERE (Simplified - just 2 types needed)
     // =========================================================================
-
-    // 1. INCR Address Increment Assertion (Write)
-    property p_incr_wr_addr_increment;
+    //
+    // TASK: Write at least 2 assertions using the tracking signals above.
+    //       DO NOT use hierarchical references like dut.u_write_channel.*
+    //
+    // Required assertions (pick 2 or more):
+    //
+    // 1. INCR address increment verification
+    //    - Check that address increments correctly for INCR bursts
+    //
+    // 2. WLAST/RLAST timing correctness  
+    //    - Check that wlast/rlast signals burst end correctly
+    //
+    // =========================================================================
+    // EXAMPLE ASSERTION (already provided - you need to add at least 1 more):
+    // =========================================================================
+    
+    // Example: INCR Write Address Increment Check
+    property p_incr_wr_addr;
         @(posedge aclk) disable iff (!aresetn)
         (wr_in_burst && wvalid && wready && wr_burst_type == BURST_INCR && wr_beat_count > 0)
         |-> (wr_current_addr == wr_prev_addr + wr_addr_incr);
     endproperty
-    
-    assert property (p_incr_wr_addr_increment)
-        else $error("ASSERTION FAILED: INCR write burst address increment mismatch");
+    assert property (p_incr_wr_addr) 
+        else $error("ASSERTION FAILED: INCR write address increment mismatch");
+
+    // =========================================================================
+    // AGENT-ADDED ASSERTIONS (GOLDEN SOLUTION)
+    // =========================================================================
+
+    // INCR Read Address Increment Check
+    property p_incr_rd_addr;
+        @(posedge aclk) disable iff (!aresetn)
+        (rd_in_burst && rvalid && rready && rd_burst_type == BURST_INCR && rd_beat_count > 0)
+        |-> (rd_current_addr == rd_prev_addr + rd_addr_incr);
+    endproperty
+    assert property (p_incr_rd_addr)
+        else $error("ASSERTION FAILED: INCR read burst address increment mismatch");
 
     // 2. INCR Address Increment Assertion (Read)
     property p_incr_rd_addr_increment;
