@@ -354,11 +354,17 @@ module axi4_slave_tb;
     assert property (p_wrap_rd_boundary)
         else $error("ASSERTION FAILED: WRAP read address outside boundary");
 
+    // Helper signals for 4KB boundary check
+    logic [31:0] wr_end_addr;
+    logic [31:0] rd_end_addr;
+    assign wr_end_addr = awaddr + ((awlen + 1) << awsize) - 1;
+    assign rd_end_addr = araddr + ((arlen + 1) << arsize) - 1;
+
     // 7. 4KB Boundary Check (Write)
     property p_4kb_wr_boundary;
         @(posedge aclk) disable iff (!aresetn)
         (awvalid && awready)
-        |-> (awaddr[31:12] == ((awaddr + ((awlen + 1) << awsize) - 1))[31:12]);
+        |-> (awaddr[31:12] == wr_end_addr[31:12]);
     endproperty
     
     assert property (p_4kb_wr_boundary)
@@ -368,7 +374,7 @@ module axi4_slave_tb;
     property p_4kb_rd_boundary;
         @(posedge aclk) disable iff (!aresetn)
         (arvalid && arready)
-        |-> (araddr[31:12] == ((araddr + ((arlen + 1) << arsize) - 1))[31:12]);
+        |-> (araddr[31:12] == rd_end_addr[31:12]);
     endproperty
     
     assert property (p_4kb_rd_boundary)
