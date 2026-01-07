@@ -1,10 +1,6 @@
 // =============================================================================
-// AXI4 Memory Data Integrity Testbench - Starter Template
-// Task: Add SVA assertions to verify memory read/write data integrity
-// =============================================================================
-//
-// The memory module stores data at addresses and returns it on read.
-// Your task: Write assertions to verify data integrity
+// AXI4 Memory Data Integrity Testbench - GOLDEN Solution
+// Verifies memory read/write data integrity with SVA assertions
 // =============================================================================
 
 `timescale 1ns/1ps
@@ -63,7 +59,7 @@ module axi4_memory_tb;
     );
 
     // =========================================================================
-    // DATA TRACKING - Use these for your assertions (already implemented)
+    // DATA TRACKING - Use these for assertions
     // =========================================================================
     
     // Track expected memory contents
@@ -108,28 +104,47 @@ module axi4_memory_tb;
     assign last_rd_mem_idx = last_rd_addr[MEM_ADDR_WIDTH+1:2];
 
     // =========================================================================
-    // ADD YOUR DATA INTEGRITY ASSERTIONS HERE
+    // GOLDEN SVA ASSERTIONS
     // =========================================================================
-    //
-    // Required assertions:
-    // 1. Read after write - data matches what was written
-    // 2. Read from unwritten address returns 0
-    // 3. Read valid timing - rd_valid follows rd_en by 1 cycle
-    //
-    // Use the tracking signals above in your assertions.
-    //
-    // Example assertion structure:
-    //
-    // property p_read_data_matches;
-    //     @(posedge clk) disable iff (!rst_n)
-    //     (rd_valid && mem_written[last_rd_mem_idx])
-    //     |-> (rd_data == expected_mem[last_rd_mem_idx]);
-    // endproperty
-    // assert property (p_read_data_matches) else $error("Data mismatch!");
-    //
-    // =========================================================================
-
-
+    
+    // Assertion 1: Read data matches written data for written addresses
+    property p_read_data_matches;
+        @(posedge clk) disable iff (!rst_n)
+        (rd_valid && mem_written[last_rd_mem_idx])
+        |-> (rd_data == expected_mem[last_rd_mem_idx]);
+    endproperty
+    
+    assert property (p_read_data_matches)
+        else $error("ASSERTION FAILED: Read data mismatch! Expected 0x%08h, got 0x%08h at addr idx %0d",
+                    expected_mem[last_rd_mem_idx], rd_data, last_rd_mem_idx);
+    
+    // Assertion 2: rd_valid follows rd_en by one cycle
+    property p_rd_valid_timing;
+        @(posedge clk) disable iff (!rst_n)
+        rd_en |=> rd_valid;
+    endproperty
+    
+    assert property (p_rd_valid_timing)
+        else $error("ASSERTION FAILED: rd_valid should follow rd_en by one cycle");
+    
+    // Assertion 3: Read from unwritten address returns 0
+    property p_read_unwritten_zero;
+        @(posedge clk) disable iff (!rst_n)
+        (rd_valid && !mem_written[last_rd_mem_idx])
+        |-> (rd_data == '0);
+    endproperty
+    
+    assert property (p_read_unwritten_zero)
+        else $error("ASSERTION FAILED: Unwritten address should return 0, got 0x%08h", rd_data);
+    
+    // Assertion 4: rd_valid only high when preceded by rd_en
+    property p_rd_valid_only_after_rd_en;
+        @(posedge clk) disable iff (!rst_n)
+        rd_valid |-> last_rd_en;
+    endproperty
+    
+    assert property (p_rd_valid_only_after_rd_en)
+        else $error("ASSERTION FAILED: rd_valid asserted without preceding rd_en");
 
     // =========================================================================
     // END OF ASSERTION SECTION
@@ -218,19 +233,37 @@ module axi4_memory_tb;
         end
     endtask
 
+    // Test: Read unwritten address
+    task automatic test_read_unwritten();
+        logic [DATA_WIDTH-1:0] read_data;
+        test_count++;
+        $display("\n[TEST %0d] Read Unwritten Address", test_count);
+        
+        mem_read(32'h0000_0F00, read_data);  // Never written
+        
+        if (read_data !== 32'h0) begin
+            $error("FAIL: Unwritten address should return 0, got 0x%08h", read_data);
+            fail_count++;
+        end else begin
+            $display("  PASS: Unwritten address returns 0");
+            pass_count++;
+        end
+    endtask
+
     // Main test sequence
     initial begin
         $dumpfile("axi4_memory_tb.vcd");
         $dumpvars(0, axi4_memory_tb);
         
         $display("================================================================");
-        $display(" AXI4 Memory Data Integrity Testbench");
+        $display(" AXI4 Memory Data Integrity Testbench - GOLDEN");
         $display("================================================================");
 
         reset_dut();
         
         test_write_read();
         test_multiple_addresses();
+        test_read_unwritten();
 
         #(CLK_PERIOD * 20);
 
@@ -238,6 +271,10 @@ module axi4_memory_tb;
         $display(" Test Summary: Total=%0d, PASSED=%0d, FAILED=%0d", 
                  test_count, pass_count, fail_count);
         $display("================================================================");
+
+        if (fail_count > 0) begin
+            $error("TESTBENCH FAILED");
+        end
 
         $finish;
     end
@@ -250,4 +287,3 @@ module axi4_memory_tb;
     end
 
 endmodule
-
