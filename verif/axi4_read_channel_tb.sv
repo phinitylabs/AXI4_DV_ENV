@@ -1,11 +1,6 @@
 // =============================================================================
-// AXI4 Read Channel Testbench - Starter Template
-// Task: Write BOTH tests AND SVA assertions for complete verification
-// =============================================================================
-//
-// This is a combined testbench + assertion problem:
-// 1. Write test tasks to exercise read transactions
-// 2. Write SVA assertions to verify protocol correctness
+// AXI4 Read Channel Testbench - GOLDEN Solution
+// Complete verification with BOTH tests AND SVA assertions
 // =============================================================================
 
 `timescale 1ns/1ps
@@ -89,7 +84,7 @@ module axi4_read_channel_tb
     );
 
     // =========================================================================
-    // MEMORY MODEL (already implemented)
+    // MEMORY MODEL
     // =========================================================================
     logic [DATA_WIDTH-1:0] mem [0:MEM_DEPTH-1];
     
@@ -114,7 +109,7 @@ module axi4_read_channel_tb
     end
 
     // =========================================================================
-    // TRACKING SIGNALS FOR ASSERTIONS (use these, don't access DUT internals)
+    // TRACKING SIGNALS FOR ASSERTIONS
     // =========================================================================
     
     // Track read address phase
@@ -149,31 +144,65 @@ module axi4_read_channel_tb
             end
         end
     end
+    
+    // Track previous rvalid for handshake check
+    logic prev_rvalid, prev_rready;
+    always_ff @(posedge clk or negedge aresetn) begin
+        if (!aresetn) begin
+            prev_rvalid <= 1'b0;
+            prev_rready <= 1'b0;
+        end else begin
+            prev_rvalid <= rvalid;
+            prev_rready <= rready;
+        end
+    end
 
     // =========================================================================
-    // ADD YOUR SVA ASSERTIONS HERE
+    // GOLDEN SVA ASSERTIONS
     // =========================================================================
-    //
-    // Required assertions:
-    // 1. RLAST timing - asserts on final beat of burst
-    // 2. RVALID/RREADY handshake - data held until accepted
-    // 3. Response correctness - proper RRESP values
-    //
-    // Example assertion structure:
-    //
-    // property p_rlast_timing;
-    //     @(posedge clk) disable iff (!aresetn)
-    //     (rvalid && rready && rd_in_burst && rd_beat_count == rd_total_beats - 1)
-    //     |-> rlast;
-    // endproperty
-    // assert property (p_rlast_timing) else $error("RLAST timing error!");
-    //
+    
+    // Assertion 1: RLAST asserts on final beat
+    property p_rlast_on_final_beat;
+        @(posedge clk) disable iff (!aresetn)
+        (rvalid && rready && rd_in_burst && (rd_beat_count == rd_total_beats - 1))
+        |-> rlast;
+    endproperty
+    
+    assert property (p_rlast_on_final_beat)
+        else $error("ASSERTION FAILED: RLAST should assert on final beat");
+    
+    // Assertion 2: RLAST only on final beat (not early)
+    property p_rlast_not_early;
+        @(posedge clk) disable iff (!aresetn)
+        (rvalid && rready && rd_in_burst && (rd_beat_count < rd_total_beats - 1) && (rd_total_beats > 1))
+        |-> !rlast;
+    endproperty
+    
+    assert property (p_rlast_not_early)
+        else $error("ASSERTION FAILED: RLAST asserted too early");
+    
+    // Assertion 3: RVALID stays high until RREADY (handshake)
+    property p_rvalid_stable;
+        @(posedge clk) disable iff (!aresetn)
+        (prev_rvalid && !prev_rready)
+        |-> rvalid;
+    endproperty
+    
+    assert property (p_rvalid_stable)
+        else $error("ASSERTION FAILED: RVALID dropped before RREADY");
+    
+    // Assertion 4: Normal response when no decode error
+    property p_rresp_okay;
+        @(posedge clk) disable iff (!aresetn)
+        (rvalid && !decode_error)
+        |-> (rresp == RESP_OKAY);
+    endproperty
+    
+    assert property (p_rresp_okay)
+        else $error("ASSERTION FAILED: RRESP should be OKAY for valid addresses");
+
     // =========================================================================
-
-
-
-    // =========================================================================
-    // END OF ASSERTION SECTION
+    // GOLDEN TEST TASKS
     // =========================================================================
 
     // Reset Task
@@ -192,43 +221,132 @@ module axi4_read_channel_tb
         repeat(5) @(posedge clk);
     endtask
 
-    // =========================================================================
-    // ADD YOUR READ TEST TASKS HERE
-    // =========================================================================
-    //
-    // Required tests:
-    // 1. Single beat read
-    // 2. Burst read (INCR type)
-    // 3. RLAST verification
-    //
-    // Example task structure:
-    //
-    // task automatic test_single_read();
-    //     test_count++;
-    //     $display("[TEST %0d] Single Beat Read", test_count);
-    //     
-    //     // Issue read address
-    //     araddr = 32'h0000_0100;
-    //     arlen = 0;  // 1 beat
-    //     arburst = BURST_INCR;
-    //     arvalid = 1;
-    //     
-    //     wait(arready);
-    //     @(posedge clk);
-    //     arvalid = 0;
-    //     
-    //     // Collect response
-    //     rready = 1;
-    //     wait(rvalid && rlast);
-    //     @(posedge clk);
-    //     rready = 0;
-    //     
-    //     pass_count++;
-    // endtask
-    //
-    // =========================================================================
+    // Test 1: Single beat read
+    task automatic test_single_read();
+        test_count++;
+        $display("\n[TEST %0d] Single Beat Read", test_count);
+        
+        // Issue read address
+        araddr = 32'h0000_0100;
+        arlen = 0;  // 1 beat
+        arid = 4'h1;
+        arburst = BURST_INCR;
+        arvalid = 1;
+        
+        wait(arready);
+        @(posedge clk);
+        arvalid = 0;
+        
+        // Collect response
+        rready = 1;
+        wait(rvalid);
+        
+        if (!rlast) begin
+            $error("FAIL: RLAST should be high for single beat");
+            fail_count++;
+        end else if (rresp !== RESP_OKAY) begin
+            $error("FAIL: Expected OKAY response");
+            fail_count++;
+        end else begin
+            $display("  PASS: Single read completed, data=0x%08h", rdata);
+            pass_count++;
+        end
+        
+        @(posedge clk);
+        rready = 0;
+        repeat(5) @(posedge clk);
+    endtask
 
+    // Test 2: 4-beat INCR burst read
+    task automatic test_burst_read();
+        int beat;
+        test_count++;
+        $display("\n[TEST %0d] 4-Beat INCR Burst Read", test_count);
+        
+        // Issue read address
+        araddr = 32'h0000_0200;
+        arlen = 3;  // 4 beats
+        arid = 4'h2;
+        arburst = BURST_INCR;
+        arsize = 2;  // 4 bytes
+        arvalid = 1;
+        
+        wait(arready);
+        @(posedge clk);
+        arvalid = 0;
+        
+        // Collect responses
+        rready = 1;
+        beat = 0;
+        
+        while (beat < 4) begin
+            wait(rvalid);
+            $display("  Beat %0d: data=0x%08h, rlast=%b", beat, rdata, rlast);
+            
+            if (beat == 3 && !rlast) begin
+                $error("FAIL: RLAST not high on final beat");
+                fail_count++;
+                break;
+            end else if (beat < 3 && rlast) begin
+                $error("FAIL: RLAST high too early at beat %0d", beat);
+                fail_count++;
+                break;
+            end
+            
+            beat++;
+            @(posedge clk);
+        end
+        
+        if (beat == 4) begin
+            $display("  PASS: Burst read completed correctly");
+            pass_count++;
+        end
+        
+        rready = 0;
+        repeat(5) @(posedge clk);
+    endtask
 
+    // Test 3: RVALID/RREADY handshake
+    task automatic test_handshake();
+        test_count++;
+        $display("\n[TEST %0d] RVALID/RREADY Handshake", test_count);
+        
+        // Issue read
+        araddr = 32'h0000_0300;
+        arlen = 0;
+        arvalid = 1;
+        
+        wait(arready);
+        @(posedge clk);
+        arvalid = 0;
+        
+        // Don't assert rready immediately
+        rready = 0;
+        wait(rvalid);
+        $display("  RVALID asserted, holding RREADY low");
+        
+        // Wait a few cycles with rready low
+        repeat(3) begin
+            @(posedge clk);
+            if (!rvalid) begin
+                $error("FAIL: RVALID dropped before RREADY");
+                fail_count++;
+                rready = 1;
+                @(posedge clk);
+                rready = 0;
+                return;
+            end
+        end
+        
+        // Now assert rready
+        rready = 1;
+        @(posedge clk);
+        $display("  PASS: RVALID held stable until RREADY");
+        pass_count++;
+        
+        rready = 0;
+        repeat(5) @(posedge clk);
+    endtask
 
     // =========================================================================
     // END OF TEST SECTION
@@ -240,15 +358,14 @@ module axi4_read_channel_tb
         $dumpvars(0, axi4_read_channel_tb);
         
         $display("================================================================");
-        $display(" AXI4 Read Channel Testbench");
+        $display(" AXI4 Read Channel Testbench - GOLDEN");
         $display("================================================================");
 
         reset_dut();
 
-        // ADD YOUR TEST TASK CALLS HERE
-        // test_single_read();
-        // test_burst_read();
-        // test_rlast_check();
+        test_single_read();
+        test_burst_read();
+        test_handshake();
 
         #(CLK_PERIOD * 100);
 
@@ -272,4 +389,3 @@ module axi4_read_channel_tb
     end
 
 endmodule
-
