@@ -74,9 +74,9 @@ class TestAXI4ReadChannelVerification:
         else:
             scores["mutation"] = 0.0
 
-        # Phase 4: Structural Quality (30%)
-        if result.phase4_structural:
-            scores["structural"] = result.phase4_structural.structural_score / 10.0
+        # Phase 5: Structural Quality (30%) - now Phase 5 since coverage is Phase 4
+        if result.phase5_structural:
+            scores["structural"] = result.phase5_structural.structural_score / 10.0
         else:
             scores["structural"] = 0.0
 
