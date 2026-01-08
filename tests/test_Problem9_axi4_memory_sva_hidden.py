@@ -99,6 +99,12 @@ class TestAXI4MemorySVAGeneration:
         if not result.phase1_compiled:
             pytest.fail(f"Compilation failed: {result.error_message}")
 
+        # Hard requirement: Must kill at least 2 mutants
+        if result.phase3_mutation and result.phase3_mutation.killed_mutants < 2:
+            pytest.fail(
+                f"Must kill at least 2 mutants. Only killed: {result.phase3_mutation.killed_mutants}"
+            )
+
         # Check total score against threshold
         if total_score < PASS_THRESHOLD:
             pytest.fail(
