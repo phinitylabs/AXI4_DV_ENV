@@ -1,13 +1,17 @@
 """
-Weighted Grading for AXI4 Decoder Testbench Generation
+Weighted Grading for AXI4 Decoder Testbench Generation (HARD MODE)
 
 Weights:
-- Compilation: 20%
-- No False Positives: 25%
-- Mutation Testing: 30%
+- Compilation: 15%
+- No False Positives: 20%
+- Mutation Testing: 40%
 - Structural Quality: 25%
 
-Pass Threshold: 50%
+Pass Threshold: 60%
+Hard Requirements:
+- Must kill at least 3/4 mutants
+- Must have at least 4 test tasks
+- Must use $error() for failures
 """
 
 import os
@@ -17,13 +21,14 @@ from grader import AXI4DecoderTBGrader
 
 
 WEIGHTS = {
-    "compilation": 0.20,
-    "no_false_positives": 0.25,
-    "mutation": 0.30,
+    "compilation": 0.15,
+    "no_false_positives": 0.20,
+    "mutation": 0.40,
     "structural": 0.25,
 }
 
-PASS_THRESHOLD = 0.50
+PASS_THRESHOLD = 0.60
+MIN_MUTANTS_KILLED = 3
 
 
 testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_decoder_tb.sv")
@@ -62,21 +67,21 @@ class TestAXI4DecoderTBGeneration:
         # Calculate weighted score
         scores = {}
 
-        # Phase 1: Compilation (20%)
+        # Phase 1: Compilation (15%)
         scores["compilation"] = 1.0 if result.phase1_compiled else 0.0
 
-        # Phase 2: No False Positives (25%)
+        # Phase 2: No False Positives (20%)
         scores["no_false_positives"] = 1.0 if result.phase2_negative_passed else 0.0
 
-        # Phase 3: Mutation Testing (30%)
+        # Phase 3: Mutation Testing (40%)
         if result.phase3_mutation:
             scores["mutation"] = result.phase3_mutation.score
         else:
             scores["mutation"] = 0.0
 
-        # Phase 4: Structural Quality (25%)
-        if result.phase4_structural:
-            scores["structural"] = result.phase4_structural.structural_score / 6.0
+        # Phase 5: Structural Quality (25%)
+        if result.phase5_structural:
+            scores["structural"] = min(result.phase5_structural.structural_score / 8.0, 1.0)
         else:
             scores["structural"] = 0.0
 
@@ -84,25 +89,28 @@ class TestAXI4DecoderTBGeneration:
         total_score = sum(scores[k] * WEIGHTS[k] for k in WEIGHTS)
 
         print("\n" + "=" * 60)
-        print("GRADING SUMMARY")
+        print("GRADING SUMMARY (HARD MODE)")
         print("=" * 60)
-        print(f"  Compilation:      {scores['compilation']:.0%} (weight: {WEIGHTS['compilation']:.0%})")
+        print(f"  Compilation:        {scores['compilation']:.0%} (weight: {WEIGHTS['compilation']:.0%})")
         print(f"  No False Positives: {scores['no_false_positives']:.0%} (weight: {WEIGHTS['no_false_positives']:.0%})")
-        print(f"  Mutation Testing: {scores['mutation']:.0%} (weight: {WEIGHTS['mutation']:.0%})")
-        print(f"  Structural:       {scores['structural']:.0%} (weight: {WEIGHTS['structural']:.0%})")
+        print(f"  Mutation Testing:   {scores['mutation']:.0%} (weight: {WEIGHTS['mutation']:.0%})")
+        print(f"  Structural:         {scores['structural']:.0%} (weight: {WEIGHTS['structural']:.0%})")
         print("-" * 60)
-        print(f"  TOTAL SCORE:      {total_score:.1%}")
-        print(f"  PASS THRESHOLD:   {PASS_THRESHOLD:.0%}")
+        print(f"  TOTAL SCORE:        {total_score:.1%}")
+        print(f"  PASS THRESHOLD:     {PASS_THRESHOLD:.0%}")
+        print(f"  MIN MUTANTS:        {MIN_MUTANTS_KILLED}/4")
         print("=" * 60)
 
         # Check if prerequisites passed
         if not result.phase1_compiled:
             pytest.fail(f"Compilation failed: {result.error_message}")
 
-        # Hard requirement: Must kill at least 2 mutants
-        if result.phase3_mutation and result.phase3_mutation.killed_mutants < 2:
+        # Hard requirement: Must kill at least 3 mutants
+        if result.phase3_mutation and result.phase3_mutation.killed_mutants < MIN_MUTANTS_KILLED:
             pytest.fail(
-                f"Must kill at least 2 mutants. Only killed: {result.phase3_mutation.killed_mutants}"
+                f"Must kill at least {MIN_MUTANTS_KILLED} mutants. "
+                f"Only killed: {result.phase3_mutation.killed_mutants}. "
+                f"Survived: {result.phase3_mutation.survived_list}"
             )
 
         # Check total score against threshold
@@ -111,4 +119,3 @@ class TestAXI4DecoderTBGeneration:
                 f"Total score {total_score:.1%} below threshold {PASS_THRESHOLD:.0%}. "
                 f"Details: {result.error_message}"
             )
-

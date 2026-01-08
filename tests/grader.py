@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-AXI4 Decoder Testbench Generation Benchmark - Grading Engine
+AXI4 Decoder Testbench Generation Benchmark - Grading Engine (HARD MODE)
 
 This grader verifies that the agent-written testbench:
 1. Compiles successfully with Verilator
 2. Passes on the golden (bug-free) DUT
 3. Detects bugs in mutant designs (mutation testing)
-4. Has proper structural quality (covers all scenarios)
+4. Achieves sufficient line coverage
+5. Has proper structural quality (covers all scenarios)
 
 Focus: Address decoder verification - valid range, invalid range, boundaries
 """
@@ -37,13 +38,23 @@ class MutationResult:
 
 
 @dataclass
+class CoverageResult:
+    """Coverage analysis results."""
+    line_coverage: float = 0.0
+    toggle_coverage: float = 0.0
+    passed: bool = False
+
+
+@dataclass
 class StructuralResult:
     """Structural quality check results."""
     has_valid_test: bool = False
     has_invalid_test: bool = False
-    has_boundary_test: bool = False
+    has_boundary_low_test: bool = False
+    has_boundary_high_test: bool = False
     has_deassert_test: bool = False
     test_count: int = 0
+    uses_error: bool = False
     structural_score: int = 0
 
 
@@ -53,7 +64,8 @@ class GradeResult:
     phase1_compiled: bool = False
     phase2_negative_passed: bool = False
     phase3_mutation: Optional[MutationResult] = None
-    phase4_structural: Optional[StructuralResult] = None
+    phase4_coverage: Optional[CoverageResult] = None
+    phase5_structural: Optional[StructuralResult] = None
     passed: bool = False
     error_message: str = ""
 
@@ -63,9 +75,10 @@ class AXI4DecoderTBGrader:
     Grader for AXI4 Decoder testbench generation benchmark.
     """
 
-    # Thresholds
-    MUTATION_MIN = 2  # Minimum mutants that must be killed
-    MIN_TESTS = 3  # Minimum test count
+    # Thresholds (HARD MODE)
+    MUTATION_MIN = 3  # Must kill 3 out of 4 mutants
+    MIN_TESTS = 4  # Minimum test count
+    MIN_LINE_COVERAGE = 0.80  # 80% line coverage required
     TIMEOUT_SECONDS = 60
 
     def __init__(
@@ -111,7 +124,7 @@ class AXI4DecoderTBGrader:
         except Exception as e:
             return -1, "", str(e)
 
-    def _compile(self, extra_sources: list[Path] = None) -> tuple[bool, str]:
+    def _compile(self, extra_sources: list[Path] = None, coverage: bool = False) -> tuple[bool, str]:
         """Compile testbench with Verilator."""
         sources = extra_sources if extra_sources else self.source_files
         source_args = [str(f) for f in sources]
@@ -120,9 +133,14 @@ class AXI4DecoderTBGrader:
             "verilator", "--binary", "-j", "0",
             "--timing", "--assert",
             "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-            "-o", "sim",
-            str(self.tb_path)
-        ] + source_args
+            "-o", "sim"
+        ]
+        
+        if coverage:
+            cmd.extend(["--coverage", "--coverage-line"])
+        
+        cmd.extend(source_args)
+        cmd.append(str(self.tb_path))
 
         code, stdout, stderr = self._run_command(cmd, timeout=self.TIMEOUT_SECONDS)
         
@@ -130,9 +148,11 @@ class AXI4DecoderTBGrader:
             return False, f"Compilation failed:\n{stderr}"
         return True, ""
 
-    def _run_simulation(self) -> tuple[bool, str, str]:
+    def _run_simulation(self, coverage: bool = False) -> tuple[bool, str, str]:
         """Run compiled simulation."""
-        sim_path = self.build_dir / "sim"
+        sim_path = self.build_dir / "obj_dir" / "sim"
+        if not sim_path.exists():
+            sim_path = self.build_dir / "sim"
         if not sim_path.exists():
             return False, "", "Simulation binary not found"
         
@@ -229,20 +249,22 @@ class AXI4DecoderTBGrader:
                     "verilator", "--binary", "-j", "0",
                     "--timing", "--assert",
                     "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-                    "-o", "sim",
-                    str(self.tb_path)
-                ] + source_args
+                    "-o", "sim"
+                ] + source_args + [str(self.tb_path)]
                 
                 code, _, stderr = self._run_command(cmd, cwd=mutant_build, timeout=30)
                 
                 if code != 0:
                     # Compilation failed - skip this mutant (don't count as killed)
                     print(f"    {mutant_name}: Compilation failed, skipping")
-                    mutation_result.total_mutants -= 1  # Don't count this one
+                    mutation_result.total_mutants -= 1
                     continue
                 
                 # Run simulation
-                sim_path = mutant_build / "sim"
+                sim_path = mutant_build / "obj_dir" / "sim"
+                if not sim_path.exists():
+                    sim_path = mutant_build / "sim"
+                    
                 code, stdout, stderr = self._run_command(
                     [str(sim_path)],
                     cwd=mutant_build,
@@ -279,36 +301,107 @@ class AXI4DecoderTBGrader:
         
         return True
 
-    def _phase4_structural_quality(self, result: GradeResult) -> bool:
-        """Phase 4: Check testbench structure and quality."""
-        print("\n[Phase 4] Structural Quality Check...")
+    def _phase4_coverage(self, result: GradeResult) -> bool:
+        """Phase 4: Check code coverage."""
+        print("\n[Phase 4] Coverage Analysis...")
+        
+        coverage_result = CoverageResult()
+        
+        # Recompile with coverage
+        cov_build = Path(tempfile.mkdtemp())
+        
+        try:
+            source_args = [str(f) for f in self.source_files]
+            cmd = [
+                "verilator", "--binary", "-j", "0",
+                "--timing", "--assert", "--coverage", "--coverage-line",
+                "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
+                "-o", "sim"
+            ] + source_args + [str(self.tb_path)]
+            
+            code, _, stderr = self._run_command(cmd, cwd=cov_build, timeout=60)
+            
+            if code != 0:
+                print("  SKIPPED: Could not compile with coverage")
+                coverage_result.passed = True  # Don't fail on coverage compile issues
+                result.phase4_coverage = coverage_result
+                return True
+            
+            # Run simulation
+            sim_path = cov_build / "obj_dir" / "sim"
+            if not sim_path.exists():
+                sim_path = cov_build / "sim"
+                
+            self._run_command([str(sim_path)], cwd=cov_build, timeout=60)
+            
+            # Parse coverage results
+            cov_file = cov_build / "coverage.dat"
+            if cov_file.exists():
+                cov_content = cov_file.read_text()
+                # Parse Verilator coverage output
+                lines_hit = len(re.findall(r'^\s*\d+\s+', cov_content, re.MULTILINE))
+                lines_total = len(re.findall(r'^.*$', cov_content, re.MULTILINE))
+                if lines_total > 0:
+                    coverage_result.line_coverage = lines_hit / lines_total
+            
+            coverage_result.passed = coverage_result.line_coverage >= self.MIN_LINE_COVERAGE
+            
+            print(f"  Line Coverage: {coverage_result.line_coverage * 100:.1f}%")
+            print(f"  Required: {self.MIN_LINE_COVERAGE * 100:.1f}%")
+            
+        finally:
+            shutil.rmtree(cov_build, ignore_errors=True)
+        
+        result.phase4_coverage = coverage_result
+        
+        # Coverage is informational, don't fail on it
+        return True
+
+    def _phase5_structural_quality(self, result: GradeResult) -> bool:
+        """Phase 5: Check testbench structure and quality."""
+        print("\n[Phase 5] Structural Quality Check...")
         
         struct_result = StructuralResult()
         
         try:
             tb_content = self.tb_path.read_text()
         except Exception as e:
-            result.error_message = f"Phase 4 FAILED: Cannot read testbench: {e}"
+            result.error_message = f"Phase 5 FAILED: Cannot read testbench: {e}"
             return False
         
-        # Check for test patterns
+        # Check for specific test patterns
+        # Valid address test (0x0000-0xFFFF range)
         struct_result.has_valid_test = bool(re.search(
-            r'(valid\s*=\s*1|valid\s*<=\s*1).*addr.*0x[0-9a-fA-F]{1,4}[^0-9a-fA-F]',
+            r'(addr\s*[=<]\s*.*0x[0-9a-fA-F]{1,4}[^0-9a-fA-F].*valid\s*[=<]\s*1|'
+            r'valid\s*[=<]\s*1.*addr\s*[=<]\s*.*0x[0-9a-fA-F]{1,4}[^0-9a-fA-F])',
             tb_content, re.IGNORECASE | re.DOTALL
-        ) or re.search(r'test.*valid|valid.*test', tb_content, re.IGNORECASE))
+        ))
         
+        # Invalid address test (above 0xFFFF)
         struct_result.has_invalid_test = bool(re.search(
-            r'(0x[1-9a-fA-F][0-9a-fA-F]{4,}|addr.*>\s*0x.*[fF]{4})',
+            r'(0x[1-9a-fA-F][0-9a-fA-F]{4,}|0x0001_?0000)',
             tb_content, re.IGNORECASE
-        ) or re.search(r'invalid|out.*range|decode_error', tb_content, re.IGNORECASE))
+        ))
         
-        struct_result.has_boundary_test = bool(re.search(
-            r'(0x0000|0x[fF]{4}|0x10000|boundary|edge)',
+        # Boundary tests
+        struct_result.has_boundary_low_test = bool(re.search(
+            r'(0x0+[^1-9a-fA-F]|BASE_ADDR\s*\+?\s*0)',
+            tb_content, re.IGNORECASE
+        ))
+        
+        struct_result.has_boundary_high_test = bool(re.search(
+            r'(0x[fF]{4}|ADDR_RANGE)',
             tb_content, re.IGNORECASE
         ))
         
         struct_result.has_deassert_test = bool(re.search(
-            r'valid\s*=\s*0|valid\s*<=\s*0',
+            r'valid\s*[=<]+\s*0',
+            tb_content
+        ))
+        
+        # Check for $error usage
+        struct_result.uses_error = bool(re.search(
+            r'\$error\s*\(',
             tb_content
         ))
         
@@ -320,25 +413,34 @@ class AXI4DecoderTBGrader:
         struct_result.structural_score = sum([
             struct_result.has_valid_test,
             struct_result.has_invalid_test,
-            struct_result.has_boundary_test,
+            struct_result.has_boundary_low_test,
+            struct_result.has_boundary_high_test,
             struct_result.has_deassert_test,
+            struct_result.uses_error,
             struct_result.test_count >= 3,
             struct_result.test_count >= 5,
         ])
         
-        result.phase4_structural = struct_result
+        result.phase5_structural = struct_result
         
         print(f"  Valid addr test: {struct_result.has_valid_test}")
         print(f"  Invalid addr test: {struct_result.has_invalid_test}")
-        print(f"  Boundary test: {struct_result.has_boundary_test}")
+        print(f"  Boundary low test: {struct_result.has_boundary_low_test}")
+        print(f"  Boundary high test: {struct_result.has_boundary_high_test}")
+        print(f"  Deassert test: {struct_result.has_deassert_test}")
+        print(f"  Uses $error: {struct_result.uses_error}")
         print(f"  Test count: {struct_result.test_count}")
-        print(f"  Structural score: {struct_result.structural_score}/6")
+        print(f"  Structural score: {struct_result.structural_score}/8")
         
         if struct_result.test_count < self.MIN_TESTS:
             result.error_message = (
-                f"Phase 4 FAILED: Only {struct_result.test_count} tests, "
+                f"Phase 5 FAILED: Only {struct_result.test_count} tests, "
                 f"need at least {self.MIN_TESTS}"
             )
+            return False
+        
+        if not struct_result.uses_error:
+            result.error_message = "Phase 5 FAILED: Tests must use $error() to report failures"
             return False
         
         return True
@@ -348,7 +450,12 @@ class AXI4DecoderTBGrader:
         result = GradeResult()
         
         print("=" * 60)
-        print("AXI4 Decoder Testbench Benchmark - Grading")
+        print("AXI4 Decoder Testbench Benchmark - Grading (HARD MODE)")
+        print("=" * 60)
+        print(f"Requirements:")
+        print(f"  - Kill {self.MUTATION_MIN}/4 mutants")
+        print(f"  - At least {self.MIN_TESTS} test tasks")
+        print(f"  - Must use $error() for failures")
         print("=" * 60)
         
         # Phase 1: Compilation
@@ -363,8 +470,11 @@ class AXI4DecoderTBGrader:
         if not self._phase3_mutation_testing(result):
             return result
         
-        # Phase 4: Structural quality
-        if not self._phase4_structural_quality(result):
+        # Phase 4: Coverage (informational)
+        self._phase4_coverage(result)
+        
+        # Phase 5: Structural quality
+        if not self._phase5_structural_quality(result):
             return result
         
         result.passed = True
@@ -395,4 +505,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
