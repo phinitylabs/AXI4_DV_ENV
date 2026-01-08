@@ -233,12 +233,12 @@ class AXI4DecoderTBGrader:
                     str(self.tb_path)
                 ] + source_args
                 
-                code, _, _ = self._run_command(cmd, cwd=mutant_build, timeout=30)
+                code, _, stderr = self._run_command(cmd, cwd=mutant_build, timeout=30)
                 
                 if code != 0:
-                    # Compilation failed - count as killed
-                    mutation_result.killed_mutants += 1
-                    mutation_result.killed_list.append(mutant_name)
+                    # Compilation failed - skip this mutant (don't count as killed)
+                    print(f"    {mutant_name}: Compilation failed, skipping")
+                    mutation_result.total_mutants -= 1  # Don't count this one
                     continue
                 
                 # Run simulation
@@ -252,11 +252,14 @@ class AXI4DecoderTBGrader:
                 output = stdout + stderr
                 errors = self._check_for_errors(output)
                 
-                if errors or code != 0:
+                # Only count as killed if simulation detected errors
+                if errors:
                     mutation_result.killed_mutants += 1
                     mutation_result.killed_list.append(mutant_name)
+                    print(f"    {mutant_name}: KILLED (errors: {errors[:2]})")
                 else:
                     mutation_result.survived_list.append(mutant_name)
+                    print(f"    {mutant_name}: SURVIVED")
                     
             finally:
                 shutil.rmtree(mutant_build, ignore_errors=True)
