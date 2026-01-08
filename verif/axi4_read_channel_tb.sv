@@ -242,10 +242,10 @@ module axi4_read_channel_tb
         wait(rvalid);
         
         if (!rlast) begin
-            $error("FAIL: RLAST should be high for single beat");
+            $error("ASSERTION FAILED: RLAST should be high for single beat");
             fail_count++;
         end else if (rresp !== RESP_OKAY) begin
-            $error("FAIL: Expected OKAY response");
+            $error("ASSERTION FAILED: Expected OKAY response");
             fail_count++;
         end else begin
             $display("  PASS: Single read completed, data=0x%08h", rdata);
@@ -284,11 +284,11 @@ module axi4_read_channel_tb
             $display("  Beat %0d: data=0x%08h, rlast=%b", beat, rdata, rlast);
             
             if (beat == 3 && !rlast) begin
-                $error("FAIL: RLAST not high on final beat");
+                $error("ASSERTION FAILED: RLAST not high on final beat");
                 fail_count++;
                 break;
             end else if (beat < 3 && rlast) begin
-                $error("FAIL: RLAST high too early at beat %0d", beat);
+                $error("ASSERTION FAILED: RLAST high too early at beat %0d", beat);
                 fail_count++;
                 break;
             end
@@ -329,7 +329,7 @@ module axi4_read_channel_tb
         repeat(3) begin
             @(posedge clk);
             if (!rvalid) begin
-                $error("FAIL: RVALID dropped before RREADY");
+                $error("ASSERTION FAILED: RVALID dropped before RREADY");
                 fail_count++;
                 rready = 1;
                 @(posedge clk);
