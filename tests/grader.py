@@ -354,7 +354,14 @@ class AXI4DecoderTBGrader:
         
         result.phase4_coverage = coverage_result
         
-        # Coverage is informational, don't fail on it
+        # Coverage is required for testbench generation
+        if not coverage_result.passed and coverage_result.line_coverage > 0:
+            result.error_message = (
+                f"Phase 4 FAILED: Line coverage {coverage_result.line_coverage*100:.1f}% "
+                f"below minimum {self.MIN_LINE_COVERAGE*100:.1f}%"
+            )
+            return False
+        
         return True
 
     def _phase5_structural_quality(self, result: GradeResult) -> bool:
