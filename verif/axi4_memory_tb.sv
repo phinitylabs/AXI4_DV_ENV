@@ -120,14 +120,14 @@ module axi4_memory_tb;
         else $error("ASSERTION FAILED: Read data mismatch! Expected 0x%08h, got 0x%08h at addr idx %0d",
                     expected_mem[last_rd_mem_idx], rd_data, last_rd_mem_idx);
     
-    // Assertion 2: rd_valid follows rd_en by one cycle
+    // Assertion 2: rd_valid follows rd_en (should match last_rd_en)
     property p_rd_valid_timing;
         @(posedge clk) disable iff (!rst_n)
-        rd_en |=> rd_valid;
+        last_rd_en |-> rd_valid;
     endproperty
     
     assert property (p_rd_valid_timing)
-        else $error("ASSERTION FAILED: rd_valid should follow rd_en by one cycle");
+        else $error("ASSERTION FAILED: rd_valid should be high when last_rd_en was high");
     
     // Assertion 3: Read from unwritten address returns 0
     property p_read_unwritten_zero;
