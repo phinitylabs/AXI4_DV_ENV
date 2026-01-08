@@ -249,7 +249,7 @@ class AXI4ReadChannelGrader:
                     continue
                 
                 # Run simulation
-                sim_path = mutant_build / "sim"
+                sim_path = mutant_build / "obj_dir" / "sim"
                 code, stdout, stderr = self._run_command(
                     [str(sim_path)],
                     cwd=mutant_build,
