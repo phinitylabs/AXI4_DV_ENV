@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AXI4 Memory Data Integrity SVA Benchmark - Grading Engine
+AXI4 Memory Data Integrity SVA Benchmark - Grading Engine (HARD MODE)
 
 This grader verifies that the agent-written SVA assertions:
 1. Compile successfully with Verilator
@@ -8,7 +8,7 @@ This grader verifies that the agent-written SVA assertions:
 3. Detect bugs in mutant designs (mutation testing)
 4. Have proper structural quality (assertion patterns)
 
-Focus: Memory data integrity - read after write, address mapping
+Focus: Memory data integrity - read after write, address mapping, timing
 """
 
 import os
@@ -39,11 +39,14 @@ class MutationResult:
 @dataclass
 class StructuralResult:
     """Structural quality check results."""
+    has_tracking_logic: bool = False
     has_assert_property: bool = False
     has_property_blocks: bool = False
     assertion_count: int = 0
     has_data_check: bool = False
-    has_valid_check: bool = False
+    has_timing_check: bool = False
+    has_reference_model: bool = False
+    uses_error: bool = False
     structural_score: int = 0
 
 
@@ -63,9 +66,9 @@ class AXI4MemorySVAGrader:
     Grader for AXI4 Memory SVA assertion generation benchmark.
     """
 
-    # Thresholds
-    MUTATION_MIN = 2  # Minimum mutants that must be killed
-    MIN_ASSERTIONS = 2  # Minimum assertion count
+    # Thresholds (HARD MODE)
+    MUTATION_MIN = 3  # Must kill 3 out of 4 mutants
+    MIN_ASSERTIONS = 3  # Minimum assertion count
     TIMEOUT_SECONDS = 60
 
     def __init__(
@@ -120,9 +123,8 @@ class AXI4MemorySVAGrader:
             "verilator", "--binary", "-j", "0",
             "--timing", "--assert",
             "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-            "-o", "sim",
-            str(self.tb_path)
-        ] + source_args
+            "-o", "sim"
+        ] + source_args + [str(self.tb_path)]
 
         code, stdout, stderr = self._run_command(cmd, timeout=self.TIMEOUT_SECONDS)
         
@@ -132,7 +134,9 @@ class AXI4MemorySVAGrader:
 
     def _run_simulation(self) -> tuple[bool, str, str]:
         """Run compiled simulation."""
-        sim_path = self.build_dir / "sim"
+        sim_path = self.build_dir / "obj_dir" / "sim"
+        if not sim_path.exists():
+            sim_path = self.build_dir / "sim"
         if not sim_path.exists():
             return False, "", "Simulation binary not found"
         
@@ -229,9 +233,8 @@ class AXI4MemorySVAGrader:
                     "verilator", "--binary", "-j", "0",
                     "--timing", "--assert",
                     "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-                    "-o", "sim",
-                    str(self.tb_path)
-                ] + source_args
+                    "-o", "sim"
+                ] + source_args + [str(self.tb_path)]
                 
                 code, _, stderr = self._run_command(cmd, cwd=mutant_build, timeout=30)
                 
@@ -242,7 +245,10 @@ class AXI4MemorySVAGrader:
                     continue
                 
                 # Run simulation
-                sim_path = mutant_build / "sim"
+                sim_path = mutant_build / "obj_dir" / "sim"
+                if not sim_path.exists():
+                    sim_path = mutant_build / "sim"
+                    
                 code, stdout, stderr = self._run_command(
                     [str(sim_path)],
                     cwd=mutant_build,
@@ -291,6 +297,17 @@ class AXI4MemorySVAGrader:
             result.error_message = f"Phase 4 FAILED: Cannot read testbench: {e}"
             return False
         
+        # Check for tracking/reference model (agent must implement this)
+        struct_result.has_tracking_logic = bool(re.search(
+            r'(expected|reference|shadow|model|track)',
+            tb_content, re.IGNORECASE
+        ))
+        
+        struct_result.has_reference_model = bool(re.search(
+            r'(expected_mem|shadow_mem|ref_mem|expected_data)',
+            tb_content, re.IGNORECASE
+        ))
+        
         # Check for assertion patterns
         struct_result.has_assert_property = bool(re.search(
             r'assert\s+property', tb_content, re.IGNORECASE
@@ -300,41 +317,70 @@ class AXI4MemorySVAGrader:
             r'property\s+\w+', tb_content
         ))
         
-        # Count assertions
-        assertions = re.findall(r'assert\s+property\s*\([^)]+\)', tb_content)
-        struct_result.assertion_count = len(assertions)
+        # Count assertions (SVA or immediate)
+        sva_assertions = re.findall(r'assert\s+property\s*\([^)]+\)', tb_content)
+        immediate_assertions = re.findall(r'\$error\s*\(', tb_content)
+        struct_result.assertion_count = len(sva_assertions) + len(immediate_assertions)
         
         # Check for data integrity checks
         struct_result.has_data_check = bool(re.search(
-            r'rd_data\s*==|expected|match', tb_content, re.IGNORECASE
+            r'(rd_data\s*===?|===?\s*rd_data|expected.*==|==.*expected)',
+            tb_content, re.IGNORECASE
         ))
         
-        struct_result.has_valid_check = bool(re.search(
-            r'rd_valid', tb_content
+        # Check for timing checks
+        struct_result.has_timing_check = bool(re.search(
+            r'(rd_valid.*rd_en|rd_en.*rd_valid|\|->|\|=>)',
+            tb_content
+        ))
+        
+        # Check for $error usage
+        struct_result.uses_error = bool(re.search(
+            r'\$error\s*\(',
+            tb_content
         ))
         
         # Calculate score
         struct_result.structural_score = sum([
-            struct_result.has_assert_property,
+            struct_result.has_tracking_logic,
+            struct_result.has_reference_model,
+            struct_result.has_assert_property or struct_result.uses_error,
             struct_result.has_property_blocks,
             struct_result.assertion_count >= 2,
             struct_result.assertion_count >= 3,
             struct_result.has_data_check,
-            struct_result.has_valid_check,
+            struct_result.has_timing_check,
         ])
         
         result.phase4_structural = struct_result
         
+        print(f"  Has tracking logic: {struct_result.has_tracking_logic}")
+        print(f"  Has reference model: {struct_result.has_reference_model}")
         print(f"  Has assert property: {struct_result.has_assert_property}")
         print(f"  Has property blocks: {struct_result.has_property_blocks}")
-        print(f"  Assertion count: {struct_result.assertion_count}")
-        print(f"  Structural score: {struct_result.structural_score}/6")
+        print(f"  Assertion/check count: {struct_result.assertion_count}")
+        print(f"  Has data integrity check: {struct_result.has_data_check}")
+        print(f"  Has timing check: {struct_result.has_timing_check}")
+        print(f"  Uses $error: {struct_result.uses_error}")
+        print(f"  Structural score: {struct_result.structural_score}/8")
+        
+        # Require reference model
+        if not struct_result.has_reference_model:
+            result.error_message = (
+                "Phase 4 FAILED: Must implement a reference model "
+                "(expected_mem, shadow_mem, etc.) to track expected data"
+            )
+            return False
         
         if struct_result.assertion_count < self.MIN_ASSERTIONS:
             result.error_message = (
-                f"Phase 4 FAILED: Only {struct_result.assertion_count} assertions, "
+                f"Phase 4 FAILED: Only {struct_result.assertion_count} assertions/checks, "
                 f"need at least {self.MIN_ASSERTIONS}"
             )
+            return False
+        
+        if not struct_result.uses_error:
+            result.error_message = "Phase 4 FAILED: Must use $error() to report failures"
             return False
         
         return True
@@ -344,7 +390,13 @@ class AXI4MemorySVAGrader:
         result = GradeResult()
         
         print("=" * 60)
-        print("AXI4 Memory SVA Assertion Benchmark - Grading")
+        print("AXI4 Memory SVA Assertion Benchmark - Grading (HARD MODE)")
+        print("=" * 60)
+        print(f"Requirements:")
+        print(f"  - Kill {self.MUTATION_MIN}/4 mutants")
+        print(f"  - At least {self.MIN_ASSERTIONS} assertions/checks")
+        print(f"  - Must implement reference model (expected_mem)")
+        print(f"  - Must use $error() for failures")
         print("=" * 60)
         
         if not self._phase1_compile(result):
@@ -387,4 +439,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
