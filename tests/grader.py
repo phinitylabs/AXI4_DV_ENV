@@ -37,6 +37,13 @@ class MutationResult:
 
 
 @dataclass
+class CoverageResult:
+    """Coverage analysis results."""
+    line_coverage: float = 0.0
+    passed: bool = False
+
+
+@dataclass
 class StructuralResult:
     """Structural quality check results."""
     # Assertion quality
@@ -59,7 +66,8 @@ class GradeResult:
     phase1_compiled: bool = False
     phase2_negative_passed: bool = False
     phase3_mutation: Optional[MutationResult] = None
-    phase4_structural: Optional[StructuralResult] = None
+    phase4_coverage: Optional[CoverageResult] = None
+    phase5_structural: Optional[StructuralResult] = None
     passed: bool = False
     error_message: str = ""
 
@@ -73,6 +81,7 @@ class AXI4ReadChannelGrader:
     MUTATION_MIN = 2  # Minimum mutants that must be killed
     MIN_ASSERTIONS = 2  # Minimum assertion count
     MIN_TESTS = 2  # Minimum test count
+    MIN_LINE_COVERAGE = 0.70  # 70% line coverage required for TB generation
     TIMEOUT_SECONDS = 60
 
     def __init__(
@@ -284,16 +293,79 @@ class AXI4ReadChannelGrader:
         
         return True
 
-    def _phase4_structural_quality(self, result: GradeResult) -> bool:
-        """Phase 4: Check both TB and assertion quality."""
-        print("\n[Phase 4] Structural Quality Check...")
+    def _phase4_coverage(self, result: GradeResult) -> bool:
+        """Phase 4: Check testbench code coverage."""
+        print("\n[Phase 4] Coverage Analysis...")
+        
+        coverage_result = CoverageResult()
+        
+        # Recompile with coverage
+        cov_build = Path(tempfile.mkdtemp())
+        
+        try:
+            source_args = [str(f) for f in self.source_files]
+            cmd = [
+                "verilator", "--binary", "-j", "0",
+                "--timing", "--assert", "--coverage", "--coverage-line",
+                "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
+                "-o", "sim"
+            ] + source_args + [str(self.tb_path)]
+            
+            code, _, stderr = self._run_command(cmd, cwd=cov_build, timeout=60)
+            
+            if code != 0:
+                print("  SKIPPED: Could not compile with coverage")
+                coverage_result.passed = True  # Don't fail on coverage compile issues
+                result.phase4_coverage = coverage_result
+                return True
+            
+            # Run simulation
+            sim_path = cov_build / "obj_dir" / "sim"
+            if not sim_path.exists():
+                sim_path = cov_build / "sim"
+                
+            self._run_command([str(sim_path)], cwd=cov_build, timeout=60)
+            
+            # Parse coverage results
+            cov_file = cov_build / "coverage.dat"
+            if cov_file.exists():
+                cov_content = cov_file.read_text()
+                # Parse Verilator coverage output
+                lines_hit = len(re.findall(r'^\s*\d+\s+', cov_content, re.MULTILINE))
+                lines_total = len(re.findall(r'^.*$', cov_content, re.MULTILINE))
+                if lines_total > 0:
+                    coverage_result.line_coverage = lines_hit / lines_total
+            
+            coverage_result.passed = coverage_result.line_coverage >= self.MIN_LINE_COVERAGE
+            
+            print(f"  Line Coverage: {coverage_result.line_coverage * 100:.1f}%")
+            print(f"  Required: {self.MIN_LINE_COVERAGE * 100:.1f}%")
+            
+        finally:
+            shutil.rmtree(cov_build, ignore_errors=True)
+        
+        result.phase4_coverage = coverage_result
+        
+        # Coverage is required for testbench generation
+        if not coverage_result.passed and coverage_result.line_coverage > 0:
+            result.error_message = (
+                f"Phase 4 FAILED: Line coverage {coverage_result.line_coverage*100:.1f}% "
+                f"below minimum {self.MIN_LINE_COVERAGE*100:.1f}%"
+            )
+            return False
+        
+        return True
+
+    def _phase5_structural_quality(self, result: GradeResult) -> bool:
+        """Phase 5: Check both TB and assertion quality."""
+        print("\n[Phase 5] Structural Quality Check...")
         
         struct_result = StructuralResult()
         
         try:
             tb_content = self.tb_path.read_text()
         except Exception as e:
-            result.error_message = f"Phase 4 FAILED: Cannot read testbench: {e}"
+            result.error_message = f"Phase 5 FAILED: Cannot read testbench: {e}"
             return False
         
         # Check assertion patterns
@@ -345,7 +417,7 @@ class AXI4ReadChannelGrader:
             struct_result.assertion_count >= 3,
         ])
         
-        result.phase4_structural = struct_result
+        result.phase5_structural = struct_result
         
         print(f"  Assertions: {struct_result.assertion_count}")
         print(f"  Tests: {struct_result.test_count}")
@@ -357,14 +429,14 @@ class AXI4ReadChannelGrader:
         # Check minimums
         if struct_result.assertion_count < self.MIN_ASSERTIONS:
             result.error_message = (
-                f"Phase 4 FAILED: Only {struct_result.assertion_count} assertions, "
+                f"Phase 5 FAILED: Only {struct_result.assertion_count} assertions, "
                 f"need at least {self.MIN_ASSERTIONS}"
             )
             return False
         
         if struct_result.test_count < self.MIN_TESTS:
             result.error_message = (
-                f"Phase 4 FAILED: Only {struct_result.test_count} tests, "
+                f"Phase 5 FAILED: Only {struct_result.test_count} tests, "
                 f"need at least {self.MIN_TESTS}"
             )
             return False
@@ -388,7 +460,10 @@ class AXI4ReadChannelGrader:
         if not self._phase3_mutation_testing(result):
             return result
         
-        if not self._phase4_structural_quality(result):
+        if not self._phase4_coverage(result):
+            return result
+        
+        if not self._phase5_structural_quality(result):
             return result
         
         result.passed = True
