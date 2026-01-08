@@ -162,9 +162,10 @@ module axi4_decoder_tb;
 
     // Test 7: Multiple valid addresses in sequence
     task automatic test_multiple_valid();
+        int errors;
+        errors = 0;
         test_count++;
         $display("\n[TEST %0d] Multiple valid addresses in sequence", test_count);
-        int errors = 0;
         
         for (int i = 0; i < 4; i++) begin
             addr = 32'h0000_1000 + (i * 32'h1000);
