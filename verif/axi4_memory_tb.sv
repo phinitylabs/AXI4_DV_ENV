@@ -76,14 +76,16 @@ module axi4_memory_tb;
     assign wr_mem_idx = wr_addr[MEM_ADDR_WIDTH+1:2];
     assign rd_mem_idx = rd_addr[MEM_ADDR_WIDTH+1:2];
     
-    // Track writes
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int i = 0; i < MEM_DEPTH; i++) begin
-                expected_mem[i] <= '0;
-                mem_written[i] <= 1'b0;
-            end
-        end else if (wr_en && wr_strb == 4'b1111) begin
+    // Track writes - use initial block for reset since Verilator doesn't support delayed array assignments in loops
+    initial begin
+        for (int i = 0; i < MEM_DEPTH; i++) begin
+            expected_mem[i] = '0;
+            mem_written[i] = 1'b0;
+        end
+    end
+    
+    always_ff @(posedge clk) begin
+        if (wr_en && wr_strb == 4'b1111 && rst_n) begin
             expected_mem[wr_mem_idx] <= wr_data;
             mem_written[wr_mem_idx] <= 1'b1;
         end
