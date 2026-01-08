@@ -259,11 +259,11 @@ class AXI4ReadChannelGrader:
                 output = stdout + stderr
                 errors = self._check_for_errors(output)
                 
-                # Only count as killed if simulation detected errors
-                if errors:
+                # Count as killed if simulation detected errors OR exited non-zero
+                if errors or code != 0:
                     mutation_result.killed_mutants += 1
                     mutation_result.killed_list.append(mutant_name)
-                    print(f"    {mutant_name}: KILLED (errors: {errors[:2]})")
+                    print(f"    {mutant_name}: KILLED (errors: {errors[:2] if errors else ['exit=' + str(code)]})")
                 else:
                     mutation_result.survived_list.append(mutant_name)
                     print(f"    {mutant_name}: SURVIVED")
