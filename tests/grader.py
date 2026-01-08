@@ -127,7 +127,7 @@ class AXI4ReadChannelGrader:
             "verilator", "--binary", "-j", "0",
             "--timing", "--assert",
             "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-            "-o", "sim"
+            "-o", "sim",
         ] + source_args + [str(self.tb_path)]
 
         code, stdout, stderr = self._run_command(cmd, timeout=self.TIMEOUT_SECONDS)
@@ -235,7 +235,7 @@ class AXI4ReadChannelGrader:
                     "verilator", "--binary", "-j", "0",
                     "--timing", "--assert",
                     "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-                    "-o", "sim"
+                    "-o", "sim",
                 ] + source_args + [str(self.tb_path)]
                 
                 code, _, stderr = self._run_command(cmd, cwd=mutant_build, timeout=30)
