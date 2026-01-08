@@ -1,10 +1,23 @@
 // =============================================================================
-// AXI4 Memory Data Integrity Testbench - Starter Template
+// AXI4 Memory Data Integrity Testbench - SVA Assertions Required
 // Task: Add SVA assertions to verify memory read/write data integrity
 // =============================================================================
 //
-// The memory module stores data at addresses and returns it on read.
-// Your task: Write assertions to verify data integrity
+// Module Under Test: axi4_memory
+//
+// The memory module behavior:
+// - Write: When wr_en=1, data is written to mem[wr_addr] using wr_strb byte enables
+// - Read: When rd_en=1, data is read from mem[rd_addr], rd_valid asserts next cycle
+//
+// Your task: Write SVA assertions that verify:
+// 1. Data integrity - reads return what was written
+// 2. Correct timing - rd_valid follows rd_en by 1 cycle
+// 3. Unwritten addresses return 0
+//
+// IMPORTANT: 
+// - You must implement your own tracking/reference model
+// - Your assertions must detect bugs in mutant designs
+// - Simple assertions that don't track state will NOT pass
 // =============================================================================
 
 `timescale 1ns/1ps
@@ -33,11 +46,6 @@ module axi4_memory_tb;
     logic [DATA_WIDTH-1:0]    rd_data;
     logic                     rd_valid;
 
-    // Test counters
-    int test_count = 0;
-    int pass_count = 0;
-    int fail_count = 0;
-
     // Clock generation
     initial begin
         clk = 0;
@@ -63,69 +71,20 @@ module axi4_memory_tb;
     );
 
     // =========================================================================
-    // DATA TRACKING - Use these for your assertions (already implemented)
-    // =========================================================================
-    
-    // Track expected memory contents
-    logic [DATA_WIDTH-1:0] expected_mem [0:MEM_DEPTH-1];
-    logic                  mem_written [0:MEM_DEPTH-1];
-    
-    // Last read address for checking
-    logic [ADDR_WIDTH-1:0] last_rd_addr;
-    logic                  last_rd_en;
-    
-    // Memory address mapping
-    localparam MEM_ADDR_WIDTH = $clog2(MEM_DEPTH);
-    logic [MEM_ADDR_WIDTH-1:0] wr_mem_idx, rd_mem_idx;
-    assign wr_mem_idx = wr_addr[MEM_ADDR_WIDTH+1:2];
-    assign rd_mem_idx = rd_addr[MEM_ADDR_WIDTH+1:2];
-    
-    // Track writes
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int i = 0; i < MEM_DEPTH; i++) begin
-                expected_mem[i] <= '0;
-                mem_written[i] <= 1'b0;
-            end
-        end else if (wr_en && wr_strb == 4'b1111) begin
-            expected_mem[wr_mem_idx] <= wr_data;
-            mem_written[wr_mem_idx] <= 1'b1;
-        end
-    end
-    
-    // Track last read
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            last_rd_addr <= '0;
-            last_rd_en <= 1'b0;
-        end else begin
-            last_rd_addr <= rd_addr;
-            last_rd_en <= rd_en;
-        end
-    end
-    
-    logic [MEM_ADDR_WIDTH-1:0] last_rd_mem_idx;
-    assign last_rd_mem_idx = last_rd_addr[MEM_ADDR_WIDTH+1:2];
-
-    // =========================================================================
-    // ADD YOUR DATA INTEGRITY ASSERTIONS HERE
+    // IMPLEMENT YOUR TRACKING LOGIC AND ASSERTIONS BELOW
     // =========================================================================
     //
-    // Required assertions:
-    // 1. Read after write - data matches what was written
-    // 2. Read from unwritten address returns 0
-    // 3. Read valid timing - rd_valid follows rd_en by 1 cycle
+    // You need to:
+    // 1. Create a reference model that tracks expected memory contents
+    // 2. Write SVA assertions that compare DUT output against reference
+    // 3. Verify timing relationships (rd_valid timing)
     //
-    // Use the tracking signals above in your assertions.
+    // Hint: You'll need to track:
+    // - What data was written to each address
+    // - Whether each address has been written
+    // - The previous read address (for checking rd_data on rd_valid)
     //
-    // Example assertion structure:
-    //
-    // property p_read_data_matches;
-    //     @(posedge clk) disable iff (!rst_n)
-    //     (rd_valid && mem_written[last_rd_mem_idx])
-    //     |-> (rd_data == expected_mem[last_rd_mem_idx]);
-    // endproperty
-    // assert property (p_read_data_matches) else $error("Data mismatch!");
+    // Your assertions MUST use $error() to report failures.
     //
     // =========================================================================
 
@@ -160,65 +119,16 @@ module axi4_memory_tb;
         @(posedge clk);
     endtask
 
-    // Read Task
-    task automatic mem_read(input logic [ADDR_WIDTH-1:0] addr, output logic [DATA_WIDTH-1:0] data);
+    // Read Task (no verification - assertions should catch errors)
+    task automatic mem_read(input logic [ADDR_WIDTH-1:0] addr);
         rd_addr = addr;
         rd_en = 1;
         @(posedge clk);
         rd_en = 0;
         @(posedge clk);
-        data = rd_data;
     endtask
 
-    // Test: Write and read back
-    task automatic test_write_read();
-        logic [DATA_WIDTH-1:0] read_data;
-        test_count++;
-        $display("\n[TEST %0d] Write and Read Back", test_count);
-        
-        mem_write(32'h0000_0100, 32'hDEAD_BEEF);
-        mem_read(32'h0000_0100, read_data);
-        
-        if (read_data !== 32'hDEAD_BEEF) begin
-            $error("FAIL: Expected 0xDEAD_BEEF, got 0x%08h", read_data);
-            fail_count++;
-        end else begin
-            $display("  PASS: Read data matches written data");
-            pass_count++;
-        end
-    endtask
-
-    // Test: Multiple addresses
-    task automatic test_multiple_addresses();
-        logic [DATA_WIDTH-1:0] read_data;
-        int errors = 0;
-        test_count++;
-        $display("\n[TEST %0d] Multiple Addresses", test_count);
-        
-        // Write to several addresses
-        for (int i = 0; i < 4; i++) begin
-            mem_write(32'h0000_0200 + (i * 4), 32'hABCD_0000 + i);
-        end
-        
-        // Read back and verify
-        for (int i = 0; i < 4; i++) begin
-            mem_read(32'h0000_0200 + (i * 4), read_data);
-            if (read_data !== (32'hABCD_0000 + i)) begin
-                $error("FAIL at addr 0x%04h: expected 0x%08h, got 0x%08h", 
-                       32'h0000_0200 + (i * 4), 32'hABCD_0000 + i, read_data);
-                errors++;
-            end
-        end
-        
-        if (errors == 0) begin
-            $display("  PASS: All addresses verified");
-            pass_count++;
-        end else begin
-            fail_count++;
-        end
-    endtask
-
-    // Main test sequence
+    // Stimulus: Exercise the memory interface
     initial begin
         $dumpfile("axi4_memory_tb.vcd");
         $dumpvars(0, axi4_memory_tb);
@@ -226,17 +136,30 @@ module axi4_memory_tb;
         $display("================================================================");
         $display(" AXI4 Memory Data Integrity Testbench");
         $display("================================================================");
+        $display(" Your assertions should detect any data integrity issues.");
+        $display("================================================================");
 
         reset_dut();
         
-        test_write_read();
-        test_multiple_addresses();
+        // Basic write and read
+        mem_write(32'h0000_0100, 32'hDEAD_BEEF);
+        mem_read(32'h0000_0100);
+        
+        // Multiple addresses
+        for (int i = 0; i < 4; i++) begin
+            mem_write(32'h0000_0200 + (i * 4), 32'hABCD_0000 + i);
+        end
+        for (int i = 0; i < 4; i++) begin
+            mem_read(32'h0000_0200 + (i * 4));
+        end
+        
+        // Read from unwritten address
+        mem_read(32'h0000_1000);
 
         #(CLK_PERIOD * 20);
 
         $display("\n================================================================");
-        $display(" Test Summary: Total=%0d, PASSED=%0d, FAILED=%0d", 
-                 test_count, pass_count, fail_count);
+        $display(" Stimulus Complete - Assertions should have detected any bugs");
         $display("================================================================");
 
         $finish;
@@ -250,4 +173,3 @@ module axi4_memory_tb;
     end
 
 endmodule
-
