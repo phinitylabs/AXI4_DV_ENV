@@ -1,17 +1,24 @@
 // =============================================================================
-// AXI4 Decoder Testbench - Starter Template
-// Task: Write tests to verify the address decoder module
+// AXI4 Decoder Testbench - Implementation Required
+// Task: Write comprehensive tests to verify the address decoder module
 // =============================================================================
+//
+// Module Under Test: axi4_decoder
 //
 // The decoder checks if an address is within a valid range:
 // - BASE_ADDR = 0x0000_0000
 // - ADDR_RANGE = 0x0000_FFFF (valid range: 0x0000 to 0xFFFF)
 //
-// When 'valid' is asserted:
-// - 'select' = 1 if address is in range
-// - 'decode_error' = 1 if address is out of range
+// Decoder Behavior:
+// - When 'valid' is asserted and address is in range: select=1, decode_error=0
+// - When 'valid' is asserted and address is out of range: select=0, decode_error=1
+// - When 'valid' is deasserted: both outputs are 0
 //
-// Your task: Write test cases to verify this behavior
+// Your task: Write comprehensive test cases that verify ALL decoder behaviors
+// including boundary conditions and edge cases.
+//
+// IMPORTANT: Tests must detect bugs in mutant designs. A basic test that only
+// checks one address will NOT be sufficient to pass the benchmark.
 // =============================================================================
 
 `timescale 1ns/1ps
@@ -31,7 +38,7 @@ module axi4_decoder_tb;
     logic select;
     logic decode_error;
 
-    // Test counters
+    // Test tracking
     int test_count = 0;
     int pass_count = 0;
     int fail_count = 0;
@@ -55,33 +62,16 @@ module axi4_decoder_tb;
     );
 
     // =========================================================================
-    // ADD YOUR TEST CASES HERE
+    // IMPLEMENT YOUR TEST CASES BELOW
     // =========================================================================
     //
-    // Required test scenarios:
-    // 1. Valid address in range - should set select=1, decode_error=0
-    // 2. Invalid address out of range - should set select=0, decode_error=1
-    // 3. Boundary conditions (address at 0x0000, 0xFFFF, 0x10000)
-    // 4. Valid signal deasserted - both outputs should be 0
+    // You need to write test tasks that:
+    // 1. Test valid addresses (in range) - verify select=1, decode_error=0
+    // 2. Test invalid addresses (out of range) - verify select=0, decode_error=1
+    // 3. Test boundary conditions (exactly at boundaries)
+    // 4. Test valid signal deassertion behavior
     //
-    // Example test pattern:
-    //
-    // task automatic test_valid_address();
-    //     test_count++;
-    //     $display("[TEST %0d] Valid address in range", test_count);
-    //     addr = 32'h0000_1000;
-    //     valid = 1;
-    //     #1;
-    //     if (select !== 1 || decode_error !== 0) begin
-    //         $error("FAIL: Expected select=1, decode_error=0");
-    //         fail_count++;
-    //     end else begin
-    //         $display("  PASS");
-    //         pass_count++;
-    //     end
-    //     valid = 0;
-    //     #(CLK_PERIOD);
-    // endtask
+    // Your tests MUST use $error() for failures to be detected by the grader.
     //
     // =========================================================================
 
@@ -99,7 +89,9 @@ module axi4_decoder_tb;
         $display("================================================================");
         $display(" AXI4 Decoder Testbench");
         $display("================================================================");
-        $display(" Valid address range: 0x%08h to 0x%08h", BASE_ADDR, BASE_ADDR + ADDR_RANGE);
+        $display(" BASE_ADDR: 0x%08h", BASE_ADDR);
+        $display(" ADDR_RANGE: 0x%08h", ADDR_RANGE);
+        $display(" Valid range: 0x%08h to 0x%08h", BASE_ADDR, BASE_ADDR + ADDR_RANGE);
         $display("================================================================");
 
         // Initialize
@@ -107,13 +99,8 @@ module axi4_decoder_tb;
         valid = 0;
         #(CLK_PERIOD * 5);
 
-        // ADD YOUR TEST TASK CALLS HERE
-        // Example:
-        // test_valid_address();
-        // test_invalid_address();
-        // test_boundary_low();
-        // test_boundary_high();
-        // test_valid_deasserted();
+        // TODO: Call your test tasks here
+
 
         #(CLK_PERIOD * 10);
 
@@ -137,4 +124,3 @@ module axi4_decoder_tb;
     end
 
 endmodule
-
