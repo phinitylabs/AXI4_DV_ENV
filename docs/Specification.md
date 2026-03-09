@@ -132,7 +132,14 @@ Add SystemVerilog Assertions (SVA) to the testbench to verify AXI4 protocol comp
 Requirements:
 - Write assertions that verify the AXI4 protocol rules described above
 - Assertions should compile with Verilator and not produce false positives
-- Use proper SVA syntax with \property\, \ssert property\, and \disable iff\
+- Use proper SVA syntax with `property`, `assert property`, and `disable iff`
+- Every `assert property` MUST have an `else $error()` clause:
+  ```systemverilog
+  assert property (p_awvalid_stable)
+    else $error("ASSERTION FAILED: AWVALID dropped before AWREADY");
+  ```
+- Do NOT use `$display("ASSERTION FAILED")` -- `$display()` is invisible to the grader.
+  Only `$error()` writes to stderr with the `%Error` prefix the grader detects.
 
 
 
