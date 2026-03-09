@@ -27,7 +27,7 @@ ERROR_MARKERS = [
     r'ASSERTION FAILED', # Standard SVA failure message
     r'TESTBENCH FAILED', # End-of-sim summary
     r'\$fatal',          # $fatal() in output
-    r'FAILED:',          # Test task failure
+    r'FAILED:\s*[1-9]',  # Test task failure (not "FAILED: 0" summary lines)
     r'\[ERROR\]',        # Alternative error format
 ]
 
