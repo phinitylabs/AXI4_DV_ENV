@@ -151,3 +151,21 @@ Your testbench should:
 4. Include meaningful SVA assertions
 5. Avoid hierarchical references (quality check)
 
+## Important: Error Reporting Requirements
+
+When your testbench detects an error, use `$error()` not `$display()`:
+
+```systemverilog
+if (!interrupt_ack_seen)
+    $error("ASSERTION FAILED: interrupt_ack not asserted after interrupt_req");
+```
+
+At simulation end, call `$fatal()` if any failures occurred:
+
+```systemverilog
+if (fail_count > 0)
+    $fatal(1, "TESTBENCH FAILED: %0d errors detected", fail_count);
+```
+
+`$error()` writes to stderr with a `%Error` prefix that the grader detects. `$display()` is not visible to the grader.
+
