@@ -1,14 +1,14 @@
 """
 Weighted Grading for AXI4 System-Level Testbench Generation (Problem 5)
 
-Weights:
+Three-pillar model (code coverage dominant):
 - Compilation: 15% (prerequisite)
-- Negative Test: 15% (prerequisite)
-- Line Coverage: 25% (proportional)
-- Mutation Testing: 30% (proportional)
-- Quality Checks: 15% (binary)
+- No False Positives: 15% (prerequisite)
+- Line Coverage: 40% (proportional - primary quality signal)
+- Mutation Testing: 20% (differential kill detection)
+- Quality Checks: 10% (structural checks)
 
-Pass Threshold: 50%
+Pass Threshold: 60%
 """
 import pytest
 import sys
@@ -22,12 +22,12 @@ from grader import AXI4TBGrader
 WEIGHTS = {
     "compilation": 0.15,
     "negative_test": 0.15,
-    "line_coverage": 0.25,
-    "mutation": 0.30,
-    "quality": 0.15,
+    "line_coverage": 0.40,
+    "mutation": 0.20,
+    "quality": 0.10,
 }
 
-PASS_THRESHOLD = 0.50
+PASS_THRESHOLD = 0.60
 
 
 def test_weighted_grade():
