@@ -75,7 +75,8 @@ Create a SystemVerilog testbench (`verif/axi4_top_tb.sv`) that:
 
 4. **Testbench Quality**:
    - Must compile AND simulate successfully with Verilator
-   - Use `$display("ASSERTION PASSED: ...")` and `$display("ASSERTION FAILED: ...")` for assertion reporting
+   - Use `$error("ASSERTION FAILED: ...")` for assertion failures (NOT `$display` — `$error` is detected by the grader)
+   - Call `$fatal(1, "TESTBENCH FAILED: %0d errors", fail_count)` at end if any failures occurred
 
 ## Verification Command
 
