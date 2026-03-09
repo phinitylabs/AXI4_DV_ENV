@@ -20,6 +20,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# === Differential error detection markers (ungameable) ===
+ERROR_MARKERS = [
+    r'%Error',           # Verilator $error() stderr prefix
+    r'ASSERTION FAILED', # Standard SVA failure message
+    r'TESTBENCH FAILED', # End-of-sim summary
+    r'\$fatal',          # $fatal() in output
+    r'FAILED:',          # Test task failure
+    r'\[ERROR\]',        # Alternative error format
+]
+
 
 @dataclass
 class MutationResult:
@@ -57,6 +67,7 @@ class GradeResult:
     phase2_negative_passed: bool = False
     phase3_mutation: Optional[MutationResult] = None
     phase4_structural: Optional[StructuralResult] = None
+    golden_output: str = ""   # Stored from Phase 2 for differential comparison
     passed: bool = False
     error_message: str = ""
 
@@ -147,21 +158,19 @@ class AXI4MemorySVAGrader:
         
         return code == 0, stdout, stderr
 
-    def _check_for_errors(self, output: str) -> list[str]:
-        """Check simulation output for error messages."""
-        errors = []
-        error_patterns = [
-            r'\[ERROR\]',
-            r'FAIL:',
-            r'\$error',
-            r'Assertion failed',
-            r'ASSERTION FAILED',
-            r'Data mismatch'
-        ]
-        for pattern in error_patterns:
-            matches = re.findall(pattern, output, re.IGNORECASE)
-            errors.extend(matches)
-        return errors
+    def _count_errors(self, output: str) -> int:
+        """Count error markers in combined stdout+stderr."""
+        return sum(len(re.findall(p, output, re.IGNORECASE)) for p in ERROR_MARKERS)
+
+    def _is_mutant_killed(self, golden_out: str, mutant_out: str, mutant_exit: int) -> bool:
+        """
+        Differential kill detection (ungameable).
+        Mutant is KILLED only if golden has 0 errors AND mutant has errors or nonzero exit.
+        """
+        return (
+            self._count_errors(golden_out) == 0
+            and (self._count_errors(mutant_out) > 0 or mutant_exit != 0)
+        )
 
     def _phase1_compile(self, result: GradeResult) -> bool:
         """Phase 1: Check if testbench compiles."""
@@ -178,24 +187,27 @@ class AXI4MemorySVAGrader:
         return True
 
     def _phase2_negative_test(self, result: GradeResult) -> bool:
-        """Phase 2: Run on golden DUT, should pass."""
+        """Phase 2: Run on golden DUT. Gate: 0 error markers. Also stores golden output."""
         print("\n[Phase 2] Negative Test (Golden DUT)...")
-        
+
         success, stdout, stderr = self._run_simulation()
-        output = stdout + stderr
-        errors = self._check_for_errors(output)
-        
-        if errors:
-            result.error_message = f"Phase 2 FAILED: Errors on golden DUT: {errors[:3]}"
-            print(f"  FAILED: Found errors on golden DUT")
+        golden_output = stdout + stderr
+        result.golden_output = golden_output  # Saved for Phase 3 differential
+
+        n_errors = self._count_errors(golden_output)
+        if n_errors > 0:
+            result.error_message = (
+                f"Phase 2 FAILED: {n_errors} error marker(s) on golden DUT (false positives)"
+            )
+            print(f"  FAILED: {n_errors} false positive(s)")
             return False
-        
+
         print("  PASSED (no false positives)")
         result.phase2_negative_passed = True
         return True
 
     def _phase3_mutation_testing(self, result: GradeResult) -> bool:
-        """Phase 3: Run on mutant DUTs, should detect bugs."""
+        """Phase 3: Differential mutation testing. Each .sv replaces axi4_memory.sv."""
         print("\n[Phase 3] Mutation Testing...")
         
         mutation_result = MutationResult()
@@ -237,35 +249,32 @@ class AXI4MemorySVAGrader:
                 ] + source_args + [str(self.tb_path)]
                 
                 code, _, stderr = self._run_command(cmd, cwd=mutant_build, timeout=30)
-                
+
                 if code != 0:
-                    # Compilation failed - skip this mutant (don't count as killed)
-                    print(f"    {mutant_name}: Compilation failed, skipping")
-                    mutation_result.total_mutants -= 1
+                    # Compile failure counts as killed
+                    mutation_result.killed_mutants += 1
+                    mutation_result.killed_list.append(f"{mutant_name}(compile_fail)")
+                    print(f"    {mutant_name}: KILLED (compile fail)")
                     continue
-                
+
                 # Run simulation
                 sim_path = mutant_build / "obj_dir" / "sim"
                 if not sim_path.exists():
                     sim_path = mutant_build / "sim"
-                    
+
                 code, stdout, stderr = self._run_command(
-                    [str(sim_path)],
-                    cwd=mutant_build,
-                    timeout=30
+                    [str(sim_path)], cwd=mutant_build, timeout=30
                 )
-                
-                output = stdout + stderr
-                errors = self._check_for_errors(output)
-                
-                # Only count as killed if simulation detected errors
-                if errors:
+                mutant_output = stdout + stderr
+
+                # Differential comparison: kill only if golden is clean AND mutant has errors
+                if self._is_mutant_killed(result.golden_output, mutant_output, code):
                     mutation_result.killed_mutants += 1
                     mutation_result.killed_list.append(mutant_name)
-                    print(f"    {mutant_name}: KILLED (errors: {errors[:2]})")
+                    print(f"    {mutant_name}: KILLED")
                 else:
                     mutation_result.survived_list.append(mutant_name)
-                    print(f"    {mutant_name}: SURVIVED")
+                    print(f"    {mutant_name}: survived")
                     
             finally:
                 shutil.rmtree(mutant_build, ignore_errors=True)
