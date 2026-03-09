@@ -137,3 +137,22 @@ Your testbench should:
 5. Test error conditions (out-of-range addresses)
 6. Cover burst transactions (FIXED, INCR, WRAP)
 7. Include timeout protection
+
+## Important: Error Reporting Requirements
+
+When your testbench detects an error, use `$error()` not `$display()`:
+
+```systemverilog
+if (rdata !== expected_data)
+    $error("ASSERTION FAILED: read data mismatch at addr 0x%h: got 0x%h expected 0x%h",
+           addr, rdata, expected_data);
+```
+
+At simulation end, call `$fatal()` if any failures occurred:
+
+```systemverilog
+if (fail_count > 0)
+    $fatal(1, "TESTBENCH FAILED: %0d errors detected", fail_count);
+```
+
+`$error()` writes to stderr with a `%Error` prefix that the grader detects. `$display()` is not visible to the grader.
