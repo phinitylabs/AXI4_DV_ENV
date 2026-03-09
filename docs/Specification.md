@@ -155,3 +155,22 @@ rlast   __________________________________|‾‾‾|____
 | EXOKAY | Exclusive OK | 2'b01 | Exclusive access success (not used) |
 | SLVERR | Slave Error | 2'b10 | Protocol error (e.g., WLAST mismatch) |
 | DECERR | Decode Error | 2'b11 | Address out of valid range |
+
+## Important: Error Reporting Requirements
+
+When your testbench detects an error, use `$error()` not `$display()`:
+
+```systemverilog
+if (rdata !== expected_data)
+    $error("ASSERTION FAILED: read data mismatch at addr 0x%h: got 0x%h expected 0x%h",
+           addr, rdata, expected_data);
+```
+
+At simulation end, call `$fatal()` if any failures occurred:
+
+```systemverilog
+if (fail_count > 0)
+    $fatal(1, "TESTBENCH FAILED: %0d errors detected", fail_count);
+```
+
+`$error()` writes to stderr with a `%Error` prefix that the grader detects. `$display()` is not visible to the grader.
