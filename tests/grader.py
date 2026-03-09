@@ -21,6 +21,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# === Differential error detection markers (ungameable) ===
+# Verilator prefixes $error() output with "%Error" in stderr.
+# $fatal() causes these same markers plus a nonzero exit.
+ERROR_MARKERS = [
+    r'%Error',           # Verilator $error() stderr prefix
+    r'ASSERTION FAILED', # Standard SVA failure message
+    r'TESTBENCH FAILED', # End-of-sim summary
+    r'\$fatal',          # $fatal() in output
+    r'FAILED:',          # Test task failure
+    r'\[ERROR\]',        # Alternative error format
+]
+
 
 @dataclass
 class MutationResult:
@@ -66,6 +78,7 @@ class GradeResult:
     phase3_mutation: Optional[MutationResult] = None
     phase4_coverage: Optional[CoverageResult] = None
     phase5_structural: Optional[StructuralResult] = None
+    golden_output: str = ""   # Stored from Phase 2 for differential comparison
     passed: bool = False
     error_message: str = ""
 
@@ -163,21 +176,63 @@ class AXI4DecoderTBGrader:
         
         return code == 0, stdout, stderr
 
-    def _check_for_errors(self, output: str) -> list[str]:
-        """Check simulation output for error messages."""
-        errors = []
-        error_patterns = [
-            r'\[ERROR\]',
-            r'FAIL:',
-            r'TESTBENCH FAILED',
-            r'\$error',
-            r'Assertion failed',
-            r'ASSERTION FAILED'
-        ]
-        for pattern in error_patterns:
-            matches = re.findall(pattern, output, re.IGNORECASE)
-            errors.extend(matches)
-        return errors
+    def _count_errors(self, output: str) -> int:
+        """Count error markers in combined stdout+stderr."""
+        return sum(len(re.findall(p, output, re.IGNORECASE)) for p in ERROR_MARKERS)
+
+    def _is_mutant_killed(self, golden_out: str, mutant_out: str, mutant_exit: int) -> bool:
+        """
+        Differential kill detection (ungameable).
+        Mutant is KILLED only if golden has 0 errors AND mutant has errors or nonzero exit.
+        """
+        return (
+            self._count_errors(golden_out) == 0
+            and (self._count_errors(mutant_out) > 0 or mutant_exit != 0)
+        )
+
+    def _parse_coverage_dat(self, cov_file: Path) -> float:
+        """Parse Verilator coverage.dat. Returns line coverage fraction."""
+        if not cov_file.exists():
+            return 0.0
+        info_file = cov_file.parent / "coverage.info"
+        ret = subprocess.run(
+            ["verilator_coverage", "--write-info", str(info_file), str(cov_file)],
+            capture_output=True, text=True,
+        )
+        if ret.returncode == 0 and info_file.exists():
+            total, hit = 0, 0
+            for line in info_file.read_text().splitlines():
+                if line.startswith("DA:"):
+                    parts = line[3:].split(",")
+                    if len(parts) >= 2:
+                        total += 1
+                        try:
+                            if int(parts[1]) > 0:
+                                hit += 1
+                        except ValueError:
+                            pass
+            return hit / total if total > 0 else 0.0
+        # Fallback: direct C-line parsing
+        total, hit = 0, 0
+        for line in cov_file.read_text().splitlines():
+            if line.startswith("C "):
+                total += 1
+                try:
+                    if int(line.strip().split()[-1]) > 0:
+                        hit += 1
+                except (ValueError, IndexError):
+                    pass
+        return hit / total if total > 0 else 0.0
+
+    def _parse_functional_coverage(self, stdout: str) -> float:
+        """Parse COVERAGE_BINS_HIT=N from axi4_coverage.sv stdout."""
+        m = re.search(r"COVERAGE_BINS_HIT=(\d+)", stdout)
+        if not m:
+            return 0.0
+        bins_hit = int(m.group(1))
+        total_m = re.search(r"COVERAGE_BINS_TOTAL=(\d+)", stdout)
+        total = int(total_m.group(1)) if total_m else 24
+        return min(bins_hit / total, 1.0)
 
     def _phase1_compile(self, result: GradeResult) -> bool:
         """Phase 1: Check if testbench compiles."""
@@ -194,24 +249,32 @@ class AXI4DecoderTBGrader:
         return True
 
     def _phase2_negative_test(self, result: GradeResult) -> bool:
-        """Phase 2: Run on golden DUT, should pass."""
+        """Phase 2: Run on golden DUT. Gate: 0 error markers. Also stores golden output."""
         print("\n[Phase 2] Negative Test (Golden DUT)...")
-        
+
         success, stdout, stderr = self._run_simulation()
-        output = stdout + stderr
-        errors = self._check_for_errors(output)
-        
-        if errors:
-            result.error_message = f"Phase 2 FAILED: Errors on golden DUT: {errors[:3]}"
-            print(f"  FAILED: Found errors on golden DUT")
+        golden_output = stdout + stderr
+        result.golden_output = golden_output  # Saved for Phase 3 differential
+
+        n_errors = self._count_errors(golden_output)
+        if n_errors > 0:
+            result.error_message = (
+                f"Phase 2 FAILED: {n_errors} error marker(s) on golden DUT (false positives)"
+            )
+            print(f"  FAILED: {n_errors} false positive(s) on golden DUT")
             return False
-        
+
+        # Also collect functional coverage from this run
+        func_cov = self._parse_functional_coverage(stdout)
+        if func_cov > 0:
+            print(f"  Functional Coverage: {func_cov*100:.1f}%")
+
         print("  PASSED (no false positives)")
         result.phase2_negative_passed = True
         return True
 
     def _phase3_mutation_testing(self, result: GradeResult) -> bool:
-        """Phase 3: Run on mutant DUTs, should detect bugs."""
+        """Phase 3: Differential mutation testing. Each .sv replaces axi4_decoder.sv."""
         print("\n[Phase 3] Mutation Testing...")
         
         mutation_result = MutationResult()
@@ -253,35 +316,32 @@ class AXI4DecoderTBGrader:
                 ] + source_args + [str(self.tb_path)]
                 
                 code, _, stderr = self._run_command(cmd, cwd=mutant_build, timeout=30)
-                
+
                 if code != 0:
-                    # Compilation failed - skip this mutant (don't count as killed)
-                    print(f"    {mutant_name}: Compilation failed, skipping")
-                    mutation_result.total_mutants -= 1
+                    # Compile failure counts as killed
+                    mutation_result.killed_mutants += 1
+                    mutation_result.killed_list.append(f"{mutant_name}(compile_fail)")
+                    print(f"    {mutant_name}: KILLED (compile fail)")
                     continue
-                
+
                 # Run simulation
                 sim_path = mutant_build / "obj_dir" / "sim"
                 if not sim_path.exists():
                     sim_path = mutant_build / "sim"
-                    
+
                 code, stdout, stderr = self._run_command(
-                    [str(sim_path)],
-                    cwd=mutant_build,
-                    timeout=30
+                    [str(sim_path)], cwd=mutant_build, timeout=30
                 )
-                
-                output = stdout + stderr
-                errors = self._check_for_errors(output)
-                
-                # Only count as killed if simulation detected errors
-                if errors:
+                mutant_output = stdout + stderr
+
+                # Differential comparison: kill only if golden is clean AND mutant has errors
+                if self._is_mutant_killed(result.golden_output, mutant_output, code):
                     mutation_result.killed_mutants += 1
                     mutation_result.killed_list.append(mutant_name)
-                    print(f"    {mutant_name}: KILLED (errors: {errors[:2]})")
+                    print(f"    {mutant_name}: KILLED")
                 else:
                     mutation_result.survived_list.append(mutant_name)
-                    print(f"    {mutant_name}: SURVIVED")
+                    print(f"    {mutant_name}: survived")
                     
             finally:
                 shutil.rmtree(mutant_build, ignore_errors=True)
@@ -314,35 +374,26 @@ class AXI4DecoderTBGrader:
             source_args = [str(f) for f in self.source_files]
             cmd = [
                 "verilator", "--binary", "-j", "0",
-                "--timing", "--assert", "--coverage", "--coverage-line",
+                "--timing", "--assert", "--coverage-line",
                 "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
+                "-Mdir", str(cov_build),
                 "-o", "sim"
             ] + source_args + [str(self.tb_path)]
-            
+
             code, _, stderr = self._run_command(cmd, cwd=cov_build, timeout=60)
-            
+
             if code != 0:
                 print("  SKIPPED: Could not compile with coverage")
-                coverage_result.passed = True  # Don't fail on coverage compile issues
+                coverage_result.passed = True
                 result.phase4_coverage = coverage_result
                 return True
-            
-            # Run simulation
-            sim_path = cov_build / "obj_dir" / "sim"
-            if not sim_path.exists():
-                sim_path = cov_build / "sim"
-                
+
+            sim_path = cov_build / "sim"
             self._run_command([str(sim_path)], cwd=cov_build, timeout=60)
             
-            # Parse coverage results
+            # Parse coverage results using proper verilator_coverage parsing
             cov_file = cov_build / "coverage.dat"
-            if cov_file.exists():
-                cov_content = cov_file.read_text()
-                # Parse Verilator coverage output
-                lines_hit = len(re.findall(r'^\s*\d+\s+', cov_content, re.MULTILINE))
-                lines_total = len(re.findall(r'^.*$', cov_content, re.MULTILINE))
-                if lines_total > 0:
-                    coverage_result.line_coverage = lines_hit / lines_total
+            coverage_result.line_coverage = self._parse_coverage_dat(cov_file)
             
             coverage_result.passed = coverage_result.line_coverage >= self.MIN_LINE_COVERAGE
             
