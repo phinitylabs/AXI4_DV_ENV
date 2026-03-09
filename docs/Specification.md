@@ -155,3 +155,17 @@ rlast   __________________________________|‾‾‾|____
 | EXOKAY | Exclusive OK | 2'b01 | Exclusive access success (not used) |
 | SLVERR | Slave Error | 2'b10 | Protocol error (e.g., WLAST mismatch) |
 | DECERR | Decode Error | 2'b11 | Address out of valid range |
+
+## Assertion Requirements
+
+Every `assert property` in your testbench MUST include an `else $error()` action block:
+
+```systemverilog
+assert property (p_awvalid_stable)
+  else $error("ASSERTION FAILED: AWVALID dropped before AWREADY");
+```
+
+Do NOT use `$display("ASSERTION FAILED")` — `$display()` output is invisible to the grader.
+Only `$error()` writes to stderr with the `%Error` prefix that the grader's differential
+comparison detects. Using `$error()` unconditionally (without an assertion condition) will
+cause false positives on the golden DUT and zero your assertion quality score.
