@@ -1,13 +1,13 @@
 """
 Weighted Grading for AXI4 Burst Boundary SVA Assertion Generation
 
-Weights (simplified):
-- Compilation: 20%
-- No False Positives: 25%
-- Mutation Testing: 30%
+Weights (SVA-dominant):
+- Compilation: 15%
+- No False Positives: 20%
+- Mutation Testing: 40%
 - Structural Quality: 25%
 
-Pass Threshold: 50% (easier to pass)
+Pass Threshold: 60%
 """
 
 import os
@@ -17,13 +17,13 @@ from grader import AXI4BurstSVAGrader
 
 
 WEIGHTS = {
-    "compilation": 0.20,
-    "no_false_positives": 0.25,
-    "mutation": 0.30,
+    "compilation": 0.15,
+    "no_false_positives": 0.20,
+    "mutation": 0.40,
     "structural": 0.25,
 }
 
-PASS_THRESHOLD = 0.50
+PASS_THRESHOLD = 0.60
 
 
 testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_slave_tb.sv")
