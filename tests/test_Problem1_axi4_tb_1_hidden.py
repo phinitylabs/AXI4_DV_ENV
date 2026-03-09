@@ -90,15 +90,24 @@ def _parse_coverage_from_log(log_content: str) -> dict:
 
 def _check_assertion_behavior(log_content: str) -> dict:
     result = {"has_assertion_passes": False, "has_assertion_failures": False, "pass_count": 0, "failure_count": 0}
-    
+
     pass_matches = re.findall(r"ASSERTION.*PASSED", log_content, re.IGNORECASE)
     result["pass_count"] = len(pass_matches)
     result["has_assertion_passes"] = len(pass_matches) > 0
-    
-    fail_matches = re.findall(r"ASSERTION.*FAILED", log_content, re.IGNORECASE)
-    result["failure_count"] = len(fail_matches)
-    result["has_assertion_failures"] = len(fail_matches) > 0
-    
+
+    # Detect assertion failures: explicit "ASSERTION FAILED" message OR Verilator %Error
+    # (which is emitted by $error() calls during simulation)
+    fail_patterns = [
+        r"ASSERTION.*FAILED",
+        r"TESTBENCH FAILED",
+        r"^\s*%Error",       # Verilator $error() prefix on its own line
+    ]
+    failure_count = 0
+    for pat in fail_patterns:
+        failure_count += len(re.findall(pat, log_content, re.IGNORECASE | re.MULTILINE))
+    result["failure_count"] = failure_count
+    result["has_assertion_failures"] = failure_count > 0
+
     return result
 
 
@@ -195,7 +204,7 @@ def test_weighted_grade():
     total_score = sum(scores.values())
     
     print("\n" + "=" * 70)
-    print("SCORE BEEDKOWN:")
+    print("SCORE BREAKDOWN:")
     for metric, score in scores.items():
         print(f"  {metric}: {score*100:.1f}%")
     print(f"  TOTAL: {total_score*100:.1f}% (Threshold: {PASS_THRESHOLD*100:.0f}%)")

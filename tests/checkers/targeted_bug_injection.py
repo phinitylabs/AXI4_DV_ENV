@@ -349,7 +349,7 @@ class TargetedBugInjectionTester:
         
         if self.simulator == "verilator":
             compile_cmd = [
-                "verilator", "--binary", "--timing",
+                "verilator", "--binary", "--timing", "--assert",
                 "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
                 "-Wno-TIMESCALEMOD", "-Wno-STMTDLY", "-Wno-INITIALDLY",
                 "--top-module", tb_name,

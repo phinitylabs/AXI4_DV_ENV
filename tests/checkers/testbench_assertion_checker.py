@@ -303,13 +303,13 @@ class AssertionChecker:
             "verilator",
             "--binary",
             "--timing",  # Enable timing for delays (#100, etc.)
+            "--assert",  # Enable SVA assert property evaluation
             "-Wno-fatal",
             "-Wno-WIDTHEXPAND",
             "-Wno-WIDTHTRUNC",
             "-Wno-TIMESCALEMOD",  # Ignore timescale warnings
             "-Wno-STMTDLY",  # Ignore statement delay warnings
             "-Wno-INITIALDLY",  # Ignore initial block delay warnings
-            "--trace",  # Enable VCD trace generation
             "--top-module", tb_name,
             "-o", exe_path,
             "--Mdir", obj_dir
