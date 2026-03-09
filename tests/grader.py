@@ -21,6 +21,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# === Differential error detection markers ===
+ERROR_MARKERS = [
+    r'%Error',           # Verilator $error() stderr prefix
+    r'ASSERTION FAILED', # Standard SVA failure message
+    r'TESTBENCH FAILED', # End-of-sim summary
+    r'\$fatal',          # $fatal() in output
+    r'FAILED:',          # Test task failure
+    r'\[ERROR\]',        # Alternative error format
+]
+
 
 @dataclass
 class CoverageResult:
@@ -73,7 +83,8 @@ class GradeResult:
     # Overall
     passed: bool = False
     error_message: str = ""
-    
+    golden_output: str = ""
+
     # Detailed metrics for analysis
     simulation_cycles: int = 0
     simulation_time_ms: int = 0
@@ -182,7 +193,16 @@ class AXI4TBGrader:
             return -1, "", "TIMEOUT"
         except Exception as e:
             return -2, "", str(e)
-    
+
+    def _count_errors(self, output: str) -> int:
+        return sum(len(re.findall(p, output, re.IGNORECASE)) for p in ERROR_MARKERS)
+
+    def _is_mutant_killed(self, golden_out: str, mutant_out: str, mutant_exit: int) -> bool:
+        return (
+            self._count_errors(golden_out) == 0
+            and (self._count_errors(mutant_out) > 0 or mutant_exit != 0)
+        )
+
     def _get_verilator_cmd(
         self,
         sources: list[Path],
@@ -315,19 +335,10 @@ class AXI4TBGrader:
         if returncode == -1:
             return False, "Simulation timeout (possible infinite loop)", -1, sim_output
         
-        # Count $error occurrences in output
-        output = stdout + stderr
-        error_pattern = r'\$error|\[ERROR\]|\[FAIL\]|ERROR:|ASSERTION FAIL'
-        errors = re.findall(error_pattern, output, re.IGNORECASE)
-        error_count = len(errors)
-        
-        # Also check for $fatal
-        if '$fatal' in output.lower() or 'fatal' in stderr.lower():
-            return False, "Testbench called $fatal on golden DUT", error_count + 1, sim_output
-        
-        if error_count > 0:
-            return False, f"Testbench reported {error_count} errors on bug-free DUT", error_count, sim_output
-        
+        n_errors = self._count_errors(sim_output)
+        if n_errors > 0:
+            return False, f"Testbench reported {n_errors} errors on golden DUT (false positives)", n_errors, sim_output
+
         return True, "", 0, sim_output
     
     # =========================================================================
@@ -400,21 +411,21 @@ class AXI4TBGrader:
     # =========================================================================
     # Phase 4: Mutation Testing
     # =========================================================================
-    def phase4_mutation(self) -> MutationResult:
+    def phase4_mutation(self, golden_output: str = "") -> MutationResult:
         """
         Run testbench against each mutant and check if bugs are detected.
         """
         result = MutationResult()
-        
+
         if not self.mutants_dir.exists():
             return result
-        
+
         mutant_dirs = sorted([d for d in self.mutants_dir.iterdir() if d.is_dir()])
         result.total_mutants = len(mutant_dirs)
-        
+
         for mutant_dir in mutant_dirs:
             mutant_name = mutant_dir.name
-            killed = self._run_mutant_test(mutant_dir)
+            killed = self._run_mutant_test(mutant_dir, golden_output=golden_output)
             
             if killed:
                 result.killed_mutants += 1
@@ -424,7 +435,7 @@ class AXI4TBGrader:
         
         return result
     
-    def _run_mutant_test(self, mutant_dir: Path) -> bool:
+    def _run_mutant_test(self, mutant_dir: Path, golden_output: str = "") -> bool:
         """
         Compile and run TB against a mutant.
         Returns True if TB detects the bug (kills the mutant).
@@ -468,37 +479,12 @@ class AXI4TBGrader:
             timeout=self.TIMEOUT_SECONDS
         )
         
-        output = stdout + stderr
-        
-        # Check if TB detected the bug
-        # Bug is "killed" if:
-        # 1. TB reports $error/$fatal
-        # 2. Simulation crashes/times out
-        # 3. Non-zero exit code
-        
+        mutant_output = stdout + stderr
+
         if returncode == -1:  # Timeout - possible hang due to bug
             return True
-        
-        if returncode != 0:  # Non-zero exit
-            return True
-        
-        # Check for error messages
-        error_patterns = [
-            r'\$error',
-            r'\$fatal',
-            r'\[ERROR\]',
-            r'\[FAIL\]',
-            r'ASSERTION FAIL',
-            r'MISMATCH',
-            r'ERROR:'
-        ]
-        
-        for pattern in error_patterns:
-            if re.search(pattern, output, re.IGNORECASE):
-                return True
-        
-        # Bug survived - TB didn't detect it
-        return False
+
+        return self._is_mutant_killed(golden_output, mutant_output, returncode)
     
     # =========================================================================
     # Phase 5: Quality Checks
@@ -614,56 +600,23 @@ class AXI4TBGrader:
             result.error_message = f"Phase 2 FAILED: {error_msg}"
             print(f"  FAILED: {error_msg}")
             return result
+        result.golden_output = sim_output
         print("  PASSED (0 errors on golden DUT)")
-        
+
         # Phase 3: Coverage
         print("\n[Phase 3] Coverage Analysis...")
         result.phase3_coverage = self.phase3_coverage(sim_output)
         print(f"  Line Coverage: {result.phase3_coverage.line_coverage:.1%}")
-        
-        # Report functional coverage
         func_cov_hit = len(result.phase3_coverage.coverpoints_hit)
         func_cov_total = len(self.COVERPOINTS)
         print(f"  Functional Coverage: {func_cov_hit}/{func_cov_total} coverpoints")
-        if result.phase3_coverage.coverpoints_hit:
-            print(f"    Hit: {result.phase3_coverage.coverpoints_hit}")
-        missing = [cp for cp in self.COVERPOINTS if cp not in result.phase3_coverage.coverpoints_hit]
-        if missing:
-            print(f"    Missing: {missing}")
-        
-        if result.phase3_coverage.line_coverage < self.COVERAGE_LINE_MIN:
-            result.error_message = (
-                f"Phase 3 FAILED: Line coverage {result.phase3_coverage.line_coverage:.1%} "
-                f"< {self.COVERAGE_LINE_MIN:.0%} minimum"
-            )
-            print(f"  FAILED: {result.error_message}")
-            return result
-        
-        # Also check functional coverage minimum
-        if func_cov_hit < self.COVERAGE_FUNCTIONAL_MIN:
-            result.error_message = (
-                f"Phase 3 FAILED: Functional coverage {func_cov_hit}/{func_cov_total} "
-                f"< {self.COVERAGE_FUNCTIONAL_MIN} minimum coverpoints"
-            )
-            print(f"  FAILED: {result.error_message}")
-            return result
-        print("  PASSED")
-        
+
         # Phase 4: Mutation Testing
         print("\n[Phase 4] Mutation Testing...")
-        result.phase4_mutation = self.phase4_mutation()
+        result.phase4_mutation = self.phase4_mutation(golden_output=sim_output)
         print(f"  Mutants Killed: {result.phase4_mutation.killed_mutants}/{result.phase4_mutation.total_mutants}")
         print(f"  Killed: {result.phase4_mutation.killed_list}")
         print(f"  Survived: {result.phase4_mutation.survived_list}")
-        
-        if result.phase4_mutation.killed_mutants < self.MUTATION_MIN:
-            result.error_message = (
-                f"Phase 4 FAILED: Only {result.phase4_mutation.killed_mutants} mutants killed, "
-                f"need {self.MUTATION_MIN}"
-            )
-            print(f"  FAILED: {result.error_message}")
-            return result
-        print("  PASSED")
         
         # Phase 5: Quality Checks
         print("\n[Phase 5] Quality Checks...")
@@ -676,24 +629,15 @@ class AXI4TBGrader:
         print(f"  Read Task: {result.phase5_quality.has_read_task}")
         
         if result.phase5_quality.illegal_hierarchical_refs:
-            result.error_message = (
-                f"Phase 5 FAILED: Illegal hierarchical refs: "
-                f"{result.phase5_quality.illegal_hierarchical_refs}"
-            )
-            print(f"  FAILED: {result.error_message}")
-            return result
-        
-        if result.phase5_quality.has_force_release:
-            result.error_message = "Phase 5 FAILED: force/release detected"
-            print(f"  FAILED: {result.error_message}")
-            return result
-        
-        print("  PASSED")
-        
-        # All phases passed!
+            print(f"  WARNING: Illegal hierarchical refs: {result.phase5_quality.illegal_hierarchical_refs}")
+        elif result.phase5_quality.has_force_release:
+            print("  WARNING: force/release detected")
+        else:
+            print("  PASSED")
+
         result.passed = True
         print("\n" + "=" * 60)
-        print("RESULT: PASSED")
+        print("RESULT: All phases complete (see weighted score for pass/fail)")
         print("=" * 60)
         
         return result

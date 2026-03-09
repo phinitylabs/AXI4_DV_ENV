@@ -1,19 +1,14 @@
 """
 Weighted Grading for AXI4 Testbench Generation (Problem 2)
 
-This grader uses weighted scoring:
-- Prerequisites (Compilation, Negative Test) must pass or grade = 0
-- Other metrics contribute proportionally to a weighted score
-- Final grade = 1 if total_score >= threshold (50%), else 0
-
-Weights:
+Three-pillar model (code coverage dominant, no functional coverage for P2):
 - Compilation: 15% (prerequisite)
-- Negative Test: 15% (prerequisite)
-- Line Coverage: 25% (proportional)
-- Mutation Testing: 30% (proportional)
-- Quality Checks: 15% (binary)
+- No False Positives: 15% (prerequisite)
+- Line Coverage: 40% (proportional - primary quality signal)
+- Mutation Testing: 20% (differential kill detection)
+- Quality Checks: 10% (structural checks)
 
-Pass Threshold: 50%
+Pass Threshold: 60%
 """
 import pytest
 import sys
@@ -31,12 +26,12 @@ from grader import AXI4TBGrader
 WEIGHTS = {
     "compilation": 0.15,       # Prerequisite - must pass
     "negative_test": 0.15,     # Prerequisite - must pass
-    "line_coverage": 0.25,     # Proportional scoring
-    "mutation": 0.30,          # Proportional scoring
-    "quality": 0.15,           # Binary
+    "line_coverage": 0.40,     # Proportional scoring - primary quality signal
+    "mutation": 0.20,          # Differential kill detection
+    "quality": 0.10,           # Structural checks
 }
 
-PASS_THRESHOLD = 0.50  # 50% - medium difficulty task
+PASS_THRESHOLD = 0.60  # 60% - must achieve good coverage
 
 
 def test_weighted_grade():
