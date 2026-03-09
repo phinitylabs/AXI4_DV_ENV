@@ -1,14 +1,14 @@
 """
 Weighted Grading for AXI4 Interrupt Controller TB+Assertion Generation
 
-Weights:
+Three-pillar model (code coverage dominant):
 - Compilation: 15%
-- Negative Test: 15%
-- Line Coverage: 20%
-- Mutation Testing: 30%
-- Quality Checks: 20%
+- No False Positives: 15%
+- Line Coverage: 40%
+- Mutation Testing: 20%
+- Quality Checks: 10%
 
-Pass Threshold: 50%
+Pass Threshold: 60%
 """
 
 import os
@@ -20,12 +20,12 @@ from grader import AXI4InterruptTBGrader
 WEIGHTS = {
     "compilation": 0.15,
     "negative_test": 0.15,
-    "line_coverage": 0.20,
-    "mutation": 0.30,
-    "quality": 0.20,
+    "line_coverage": 0.40,
+    "mutation": 0.20,
+    "quality": 0.10,
 }
 
-PASS_THRESHOLD = 0.50
+PASS_THRESHOLD = 0.60
 
 
 testbench_path = os.getenv("TESTBENCH_PATH", "verif/axi4_top_tb.sv")

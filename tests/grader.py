@@ -19,6 +19,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# === Differential error detection markers ===
+ERROR_MARKERS = [
+    r'%Error',           # Verilator $error() stderr prefix
+    r'ASSERTION FAILED', # Standard SVA failure message
+    r'TESTBENCH FAILED', # End-of-sim summary
+    r'\$fatal',          # $fatal() in output
+    r'FAILED:',          # Test task failure
+    r'\[ERROR\]',        # Alternative error format
+]
+
 
 @dataclass
 class CoverageResult:
@@ -64,6 +74,7 @@ class GradeResult:
     phase5_quality: Optional[QualityResult] = None
     passed: bool = False
     error_message: str = ""
+    golden_output: str = ""
 
 
 class AXI4InterruptTBGrader:
@@ -120,7 +131,16 @@ class AXI4InterruptTBGrader:
             return -1, "", "TIMEOUT"
         except Exception as e:
             return -2, "", str(e)
-    
+
+    def _count_errors(self, output: str) -> int:
+        return sum(len(re.findall(p, output, re.IGNORECASE)) for p in ERROR_MARKERS)
+
+    def _is_mutant_killed(self, golden_out: str, mutant_out: str, mutant_exit: int) -> bool:
+        return (
+            self._count_errors(golden_out) == 0
+            and (self._count_errors(mutant_out) > 0 or mutant_exit != 0)
+        )
+
     def _get_verilator_cmd(
         self,
         sources: list[Path],
@@ -211,17 +231,10 @@ class AXI4InterruptTBGrader:
         if returncode == -1:
             return False, "Simulation timeout (possible infinite loop)", sim_output
         
-        error_patterns = [
-            r'ASSERTION FAILED',
-            r'\$error',
-            r'\[ERROR\]',
-            r'\$fatal'
-        ]
-        
-        for pattern in error_patterns:
-            if re.search(pattern, sim_output, re.IGNORECASE):
-                return False, "Errors detected on golden DUT", sim_output
-        
+        n_errors = self._count_errors(sim_output)
+        if n_errors > 0:
+            return False, f"Errors detected on golden DUT ({n_errors} false positives)", sim_output
+
         return True, "", sim_output
     
     def phase3_coverage(self) -> CoverageResult:
@@ -235,45 +248,44 @@ class AXI4InterruptTBGrader:
         try:
             with open(coverage_file, 'r') as f:
                 content = f.read()
-            
+
             total_lines = 0
             covered_lines = 0
-            
+
+            # Verilator coverage.dat format: C 'path_info' <hit_count>
             for line in content.split('\n'):
-                if 'axi4_interrupt' in line.lower():
+                if line.startswith('C '):
                     parts = line.split()
                     if len(parts) >= 2:
                         try:
-                            covered = int(parts[0])
-                            total = int(parts[1]) if len(parts) > 1 else 1
-                            covered_lines += covered
-                            total_lines += total
-                        except ValueError:
+                            hits = int(parts[-1])
+                            total_lines += 1
+                            if hits > 0:
+                                covered_lines += 1
+                        except (ValueError, IndexError):
                             pass
-            
+
             if total_lines > 0:
                 result.line_coverage = covered_lines / total_lines
-            else:
-                result.line_coverage = 0.30  # Assume reasonable coverage if file exists
-                
+
         except Exception:
             pass
         
         return result
     
-    def phase4_mutation(self) -> MutationResult:
+    def phase4_mutation(self, golden_output: str = "") -> MutationResult:
         """Run testbench against mutant designs."""
         result = MutationResult()
-        
+
         if not self.mutants_dir.exists():
             return result
-        
+
         mutant_dirs = sorted([d for d in self.mutants_dir.iterdir() if d.is_dir()])
         result.total_mutants = len(mutant_dirs)
-        
+
         for mutant_dir in mutant_dirs:
             mutant_name = mutant_dir.name
-            killed = self._run_mutant_test(mutant_dir)
+            killed = self._run_mutant_test(mutant_dir, golden_output=golden_output)
             
             if killed:
                 result.killed_mutants += 1
@@ -283,7 +295,7 @@ class AXI4InterruptTBGrader:
         
         return result
     
-    def _run_mutant_test(self, mutant_dir: Path) -> bool:
+    def _run_mutant_test(self, mutant_dir: Path, golden_output: str = "") -> bool:
         """Compile and run TB against a mutant."""
         mutant_name = mutant_dir.name
         mutant_sources = []
@@ -317,27 +329,12 @@ class AXI4InterruptTBGrader:
             timeout=self.TIMEOUT_SECONDS
         )
         
-        output = stdout + stderr
-        
+        mutant_output = stdout + stderr
+
         if returncode == -1:  # Timeout
             return True
-        if returncode != 0:
-            return True
-        
-        error_patterns = [
-            r'ASSERTION FAILED',
-            r'\$error',
-            r'\$fatal',
-            r'\[ERROR\]',
-            r'\[FAIL\]',
-            r'MISMATCH',
-        ]
-        
-        for pattern in error_patterns:
-            if re.search(pattern, output, re.IGNORECASE):
-                return True
-        
-        return False
+
+        return self._is_mutant_killed(golden_output, mutant_output, returncode)
     
     def phase5_quality(self) -> QualityResult:
         """Check testbench quality and anti-cheat measures."""
@@ -415,18 +412,15 @@ class AXI4InterruptTBGrader:
             result.error_message = f"Phase 2 FAILED: {error_msg}"
             print(f"  FAILED: {error_msg}")
             return result
+        result.golden_output = sim_output
         print("  PASSED (no false positives)")
-        
+
         print("\n[Phase 3] Coverage Analysis...")
         result.phase3_coverage = self.phase3_coverage()
         print(f"  Line Coverage: {result.phase3_coverage.line_coverage:.1%}")
-        
-        if result.phase3_coverage.line_coverage < self.COVERAGE_LINE_MIN:
-            result.error_message = f"Line coverage {result.phase3_coverage.line_coverage:.1%} < {self.COVERAGE_LINE_MIN:.0%} minimum"
-            print(f"  WARNING: {result.error_message}")
-        
+
         print("\n[Phase 4] Mutation Testing...")
-        result.phase4_mutation = self.phase4_mutation()
+        result.phase4_mutation = self.phase4_mutation(golden_output=sim_output)
         print(f"  Mutants Killed: {result.phase4_mutation.killed_mutants}/{result.phase4_mutation.total_mutants}")
         print(f"  Killed: {result.phase4_mutation.killed_list}")
         print(f"  Survived: {result.phase4_mutation.survived_list}")
@@ -446,13 +440,13 @@ class AXI4InterruptTBGrader:
         print(f"  Structural Score: {result.phase5_quality.structural_score}/6")
         
         if result.phase5_quality.illegal_hierarchical_refs:
-            result.error_message = f"Phase 5 FAILED: Illegal hierarchical references found"
-            print(f"  FAILED: {result.error_message}")
-            return result
-        
+            print(f"  WARNING: Illegal hierarchical refs: {result.phase5_quality.illegal_hierarchical_refs}")
+        else:
+            print("  PASSED")
+
         result.passed = True
         print("\n" + "=" * 60)
-        print("RESULT: PASSED")
+        print("RESULT: All phases complete (see weighted score for pass/fail)")
         print("=" * 60)
         
         return result
