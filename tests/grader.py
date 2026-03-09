@@ -24,6 +24,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# === Differential error detection markers (ungameable) ===
+ERROR_MARKERS = [
+    r'%Error',           # Verilator $error() stderr prefix
+    r'ASSERTION FAILED', # Standard SVA failure message
+    r'TESTBENCH FAILED', # End-of-sim summary
+    r'\$fatal',          # $fatal() in output
+    r'FAILED:',          # Test task failure
+    r'\[ERROR\]',        # Alternative error format
+]
+
 
 @dataclass
 class MutationResult:
@@ -64,6 +74,7 @@ class GradeResult:
     phase4_structural: Optional[StructuralResult] = None
 
     # Overall
+    golden_output: str = ""   # Stored from Phase 2 for differential comparison
     passed: bool = False
     error_message: str = ""
 
@@ -122,6 +133,20 @@ class AXI4SVAGrader:
             return -1, "", "TIMEOUT"
         except Exception as e:
             return -2, "", str(e)
+
+    def _count_errors(self, output: str) -> int:
+        """Count error markers in combined stdout+stderr."""
+        return sum(len(re.findall(p, output, re.IGNORECASE)) for p in ERROR_MARKERS)
+
+    def _is_mutant_killed(self, golden_out: str, mutant_out: str, mutant_exit: int) -> bool:
+        """
+        Differential kill detection (ungameable).
+        Mutant is KILLED only if golden has 0 errors AND mutant has errors or nonzero exit.
+        """
+        return (
+            self._count_errors(golden_out) == 0
+            and (self._count_errors(mutant_out) > 0 or mutant_exit != 0)
+        )
 
     def _get_verilator_cmd(
         self,
@@ -219,26 +244,18 @@ class AXI4SVAGrader:
         if returncode == -1:
             return False, "Simulation timeout (possible infinite loop)", sim_output
 
-        # Check for assertion failures
-        output = stdout + stderr
-        error_patterns = [
-            r'ASSERTION FAILED',
-            r'\$error',
-            r'\[ERROR\]',
-            r'\$fatal'
-        ]
-
-        for pattern in error_patterns:
-            if re.search(pattern, output, re.IGNORECASE):
-                return False, f"Assertions fired on golden DUT (false positive)", sim_output
+        # Differential check: golden must have 0 error markers
+        n_errors = self._count_errors(sim_output)
+        if n_errors > 0:
+            return False, f"Assertions fired on golden DUT ({n_errors} false positives)", sim_output
 
         return True, "", sim_output
 
     # =========================================================================
-    # Phase 3: Mutation Testing
+    # Phase 3: Mutation Testing (differential)
     # =========================================================================
-    def phase3_mutation(self) -> MutationResult:
-        """Run testbench against mutant designs to check bug detection."""
+    def phase3_mutation(self, golden_output: str = "") -> MutationResult:
+        """Differential mutation testing. Mutant killed iff golden clean AND mutant has errors."""
         result = MutationResult()
 
         if not self.mutants_dir.exists():
@@ -249,7 +266,7 @@ class AXI4SVAGrader:
 
         for mutant_dir in mutant_dirs:
             mutant_name = mutant_dir.name
-            killed = self._run_mutant_test(mutant_dir)
+            killed = self._run_mutant_test(mutant_dir, golden_output)
 
             if killed:
                 result.killed_mutants += 1
@@ -259,10 +276,10 @@ class AXI4SVAGrader:
 
         return result
 
-    def _run_mutant_test(self, mutant_dir: Path) -> bool:
+    def _run_mutant_test(self, mutant_dir: Path, golden_output: str = "") -> bool:
         """
-        Compile and run TB against a mutant.
-        Returns True if assertions detect the bug (kill the mutant).
+        Compile and run TB against a mutant. Differential detection:
+        Returns True (killed) only if golden_output has 0 errors AND mutant has errors.
         """
         mutant_name = mutant_dir.name
 
@@ -301,31 +318,14 @@ class AXI4SVAGrader:
             timeout=self.TIMEOUT_SECONDS
         )
 
-        output = stdout + stderr
+        mutant_output = stdout + stderr
 
-        # Check if assertions detected the bug
-        if returncode == -1:  # Timeout
+        # Timeout counts as kill (hung = deadlock = bug detected)
+        if returncode == -1:
             return True
 
-        if returncode != 0:  # Non-zero exit
-            return True
-
-        # Check for assertion error messages
-        error_patterns = [
-            r'ASSERTION FAILED',
-            r'\$error',
-            r'\$fatal',
-            r'\[ERROR\]',
-            r'\[FAIL\]',
-            r'MISMATCH',
-        ]
-
-        for pattern in error_patterns:
-            if re.search(pattern, output, re.IGNORECASE):
-                return True
-
-        # Bug survived - assertions didn't detect it
-        return False
+        # Differential comparison: kill only if golden is clean AND mutant has errors
+        return self._is_mutant_killed(golden_output, mutant_output, returncode)
 
     # =========================================================================
     # Phase 4: Structural Checks
@@ -435,7 +435,8 @@ class AXI4SVAGrader:
 
         # Phase 3: Mutation Testing
         print("\n[Phase 3] Mutation Testing...")
-        result.phase3_mutation = self.phase3_mutation()
+        result.golden_output = sim_output
+        result.phase3_mutation = self.phase3_mutation(golden_output=sim_output)
         print(f"  Mutants Killed: {result.phase3_mutation.killed_mutants}/{result.phase3_mutation.total_mutants}")
         print(f"  Killed: {result.phase3_mutation.killed_list}")
         print(f"  Survived: {result.phase3_mutation.survived_list}")
