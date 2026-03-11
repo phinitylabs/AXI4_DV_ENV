@@ -75,7 +75,20 @@ Create a SystemVerilog testbench (`verif/axi4_top_tb.sv`) that:
 
 4. **Testbench Quality**:
    - Must compile AND simulate successfully with Verilator
-   - Use `$display("ASSERTION PASSED: ...")` and `$display("ASSERTION FAILED: ...")` for assertion reporting
+   - Failure messages MUST use `$error()` — NOT `$display()`:
+     ```systemverilog
+     if (actual !== expected)
+       $error("FAILED: addr=0x%0h expected=0x%0h got=0x%0h", addr, expected, actual);
+     ```
+   - Simulation MUST exit nonzero if any test fails:
+     ```systemverilog
+     if (fail_count > 0)
+       $fatal(1, "TESTBENCH FAILED: %0d failure(s)", fail_count);
+     ```
+   - **Why**: The grader uses differential comparison. `$error()` writes to stderr
+     with a `%Error` prefix that the grader detects. `$display()` is invisible and
+     will not count as a detected bug. Unconditional `$error` prints will cause false
+     positives on the golden DUT and zero your score.
 
 ## Verification Command
 
