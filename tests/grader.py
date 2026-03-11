@@ -259,6 +259,25 @@ class AXI4ReadChannelGrader:
             print("  FAILED")
             return False
 
+        # Verilator 5.x --binary mode does not write coverage.dat automatically.
+        # Patch the generated main to call contextp->coveragep()->write() before topp->final().
+        for main_f in build.glob("V*__main.cpp"):
+            content = main_f.read_text()
+            if "coverage.dat" not in content:
+                patched = content.replace(
+                    "topp->final();",
+                    'topp->final();\n    if (contextp->coveragep()) contextp->coveragep()->write("coverage.dat");'
+                )
+                if patched != content:
+                    main_f.write_text(patched)
+                    mk_files = list(build.glob("V*.mk"))
+                    if mk_files:
+                        subprocess.run(
+                            ["make", "-j", "0", "-C", str(build), "-f", mk_files[0].name],
+                            capture_output=True, text=True, timeout=120
+                        )
+                    break
+
         print("  PASSED")
         result.phase1_compiled = True
         return True

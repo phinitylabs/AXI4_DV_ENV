@@ -241,11 +241,16 @@ module axi4_read_channel_tb
         rready = 1;
         wait(rvalid);
         
+        // araddr=0x100 → word index 0x100>>2=0x40=64; expected data = 32'hDADA_0000+64
         if (!rlast) begin
             $error("ASSERTION FAILED: RLAST should be high for single beat");
             fail_count++;
         end else if (rresp !== RESP_OKAY) begin
             $error("ASSERTION FAILED: Expected OKAY response");
+            fail_count++;
+        end else if (rdata !== (32'hDADA_0000 + 32'd64)) begin
+            $error("ASSERTION FAILED: Data mismatch: got 0x%08h, expected 0x%08h",
+                   rdata, 32'hDADA_0000 + 32'd64);
             fail_count++;
         end else begin
             $display("  PASS: Single read completed, data=0x%08h", rdata);
@@ -279,10 +284,11 @@ module axi4_read_channel_tb
         rready = 1;
         beat = 0;
         
+        // araddr=0x200 → word index 0x200>>2=0x80=128; beat i at word (128+i)
         while (beat < 4) begin
             wait(rvalid);
             $display("  Beat %0d: data=0x%08h, rlast=%b", beat, rdata, rlast);
-            
+
             if (beat == 3 && !rlast) begin
                 $error("ASSERTION FAILED: RLAST not high on final beat");
                 fail_count++;
@@ -291,12 +297,17 @@ module axi4_read_channel_tb
                 $error("ASSERTION FAILED: RLAST high too early at beat %0d", beat);
                 fail_count++;
                 break;
+            end else if (rdata !== (32'hDADA_0000 + 32'd128 + beat)) begin
+                $error("ASSERTION FAILED: Burst beat %0d data mismatch: got 0x%08h, expected 0x%08h",
+                       beat, rdata, 32'hDADA_0000 + 32'd128 + beat);
+                fail_count++;
+                break;
             end
-            
+
             beat++;
             @(posedge clk);
         end
-        
+
         if (beat == 4) begin
             $display("  PASS: Burst read completed correctly");
             pass_count++;
@@ -384,7 +395,7 @@ module axi4_read_channel_tb
     // Timeout
     initial begin
         #5000000;
-        $display("ERROR: Timeout!");
+        $error("TESTBENCH TIMEOUT: simulation exceeded time limit");
         $finish;
     end
 
