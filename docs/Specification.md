@@ -112,6 +112,24 @@ Your assertions should:
 3. Detect burst boundary violations when they occur
 4. Use proper SVA syntax with `property`, `assert property`, and `disable iff`
 
+## Important: Error Reporting Requirements
+
+Assertion failures **must** use `$error()`, not `$display()`:
+
+```systemverilog
+assert property (p_incr_addr_increment)
+    else $error("ASSERTION FAILED: INCR burst address mismatch");
+```
+
+If your testbench tracks a failure count, end simulation with `$fatal()` on failure:
+
+```systemverilog
+if (fail_count > 0)
+    $fatal(1, "TESTBENCH FAILED: %0d assertion failures", fail_count);
+```
+
+`$error()` writes to stderr with `%Error` prefix (visible to the grader). `$display()` is not detected.
+
 ## Example Assertion Structure
 
 ```systemverilog
