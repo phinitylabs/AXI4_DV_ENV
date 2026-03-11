@@ -390,12 +390,14 @@ class AXI4DecoderTBGrader:
 
             # Verilator 5.x --binary mode does not write coverage.dat automatically.
             # Patch the generated main to call coverage write before topp->final().
+            # Must include verilated_cov.h for VerilatedCovContext::write() to be available.
             for main_f in cov_build.glob("V*__main.cpp"):
                 content = main_f.read_text()
                 if "coverage.dat" not in content:
-                    patched = content.replace(
+                    patched = '#include "verilated_cov.h"\n' + content
+                    patched = patched.replace(
                         "topp->final();",
-                        'topp->final();\n    if (contextp->coveragep()) contextp->coveragep()->write("coverage.dat");'
+                        'topp->final();\n    contextp->coveragep()->write("coverage.dat");'
                     )
                     if patched != content:
                         main_f.write_text(patched)
