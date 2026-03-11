@@ -143,7 +143,7 @@ class AXI4DecoderTBGrader:
         source_args = [str(f) for f in sources]
         
         cmd = [
-            "verilator", "--binary", "-j", "0",
+            "verilator", "--binary", "-j", "4",
             "--timing", "--assert",
             "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
             "-o", "sim"
@@ -309,7 +309,7 @@ class AXI4DecoderTBGrader:
                 # Compile with mutant
                 source_args = [str(f) for f in mutant_sources]
                 cmd = [
-                    "verilator", "--binary", "-j", "0",
+                    "verilator", "--binary", "-j", "4",
                     "--timing", "--assert",
                     "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
                     "-o", "sim"
@@ -373,7 +373,7 @@ class AXI4DecoderTBGrader:
         try:
             source_args = [str(f) for f in self.source_files]
             cmd = [
-                "verilator", "--binary", "-j", "0",
+                "verilator", "--binary", "-j", "4",
                 "--timing", "--assert", "--coverage-line",
                 "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
                 "-Mdir", str(cov_build),
