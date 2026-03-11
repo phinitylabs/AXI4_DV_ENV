@@ -402,7 +402,7 @@ class AXI4DecoderTBGrader:
                         mk_files = list(cov_build.glob("V*.mk"))
                         if mk_files:
                             subprocess.run(
-                                ["make", "-j", "0", "-C", str(cov_build), "-f", mk_files[0].name],
+                                ["make", "-j4", "-C", str(cov_build), "-f", mk_files[0].name],
                                 capture_output=True, text=True, timeout=120
                             )
                         break
