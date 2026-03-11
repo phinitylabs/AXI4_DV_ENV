@@ -307,6 +307,7 @@ module axi4_read_channel_tb
 
             beat++;
             @(posedge clk);
+            #1; // avoid race: let DUT's always_ff update rdata/rvalid before next wait(rvalid)
         end
 
         if (beat == 4) begin
