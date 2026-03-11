@@ -388,9 +388,30 @@ class AXI4DecoderTBGrader:
                 result.phase4_coverage = coverage_result
                 return True
 
+            # Verilator 5.x --binary mode does not write coverage.dat automatically.
+            # Patch the generated main to call contextp->coveragep()->write() before topp->final().
+            for main_f in cov_build.glob("V*__main.cpp"):
+                content = main_f.read_text()
+                if "coverage.dat" not in content:
+                    patched = content.replace(
+                        "topp->final();",
+                        'topp->final();\n    if (contextp->coveragep()) contextp->coveragep()->write("coverage.dat");'
+                    )
+                    if patched != content:
+                        main_f.write_text(patched)
+                        mk_files = list(cov_build.glob("V*.mk"))
+                        if mk_files:
+                            subprocess.run(
+                                ["make", "-j", "0", "-C", str(cov_build), "-f", mk_files[0].name],
+                                capture_output=True, text=True, timeout=120
+                            )
+                        break
+
             sim_path = cov_build / "sim"
+            if not sim_path.exists():
+                sim_path = cov_build / "obj_dir" / "sim"
             self._run_command([str(sim_path)], cwd=cov_build, timeout=60)
-            
+
             # Parse coverage results using proper verilator_coverage parsing
             cov_file = cov_build / "coverage.dat"
             coverage_result.line_coverage = self._parse_coverage_dat(cov_file)
