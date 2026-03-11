@@ -258,6 +258,7 @@ module axi4_read_channel_tb
         end
         
         @(posedge clk);
+        #1; // avoid race: let DUT's always_ff process handshake before deasserting rready
         rready = 0;
         repeat(5) @(posedge clk);
     endtask
@@ -312,7 +313,8 @@ module axi4_read_channel_tb
             $display("  PASS: Burst read completed correctly");
             pass_count++;
         end
-        
+
+        #1; // avoid race: let DUT's always_ff process last handshake before deasserting rready
         rready = 0;
         repeat(5) @(posedge clk);
     endtask
@@ -354,7 +356,8 @@ module axi4_read_channel_tb
         @(posedge clk);
         $display("  PASS: RVALID held stable until RREADY");
         pass_count++;
-        
+
+        #1; // avoid race: let DUT's always_ff process handshake before deasserting rready
         rready = 0;
         repeat(5) @(posedge clk);
     endtask
